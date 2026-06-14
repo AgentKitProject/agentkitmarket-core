@@ -1,0 +1,53 @@
+{
+  "name": "@agentkitforge/market-core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Runtime-agnostic AgentKitMarket backend core: routes, services, ports, and AWS + self-host adapters. Shared by the hosted (Lambda/DynamoDB) and self-hosted (container/Postgres on k8s) deployments.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./entrypoints/lambda": {
+      "types": "./dist/entrypoints/lambda.d.ts",
+      "default": "./dist/entrypoints/lambda.js"
+    },
+    "./entrypoints/server": {
+      "types": "./dist/entrypoints/server.d.ts",
+      "default": "./dist/entrypoints/server.js"
+    },
+    "./entrypoints/worker": {
+      "types": "./dist/entrypoints/worker.d.ts",
+      "default": "./dist/entrypoints/worker.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentKitProject/agentkitmarket-core"
+  },
+  "dependencies": {
+    "@agentkitforge/contracts": "^0.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.14"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
