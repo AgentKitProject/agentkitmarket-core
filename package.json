@@ -1,7 +1,6 @@
 {
   "name": "@agentkitforge/market-core",
   "version": "0.0.0",
-  "private": true,
   "description": "Runtime-agnostic AgentKitMarket backend core: routes, services, ports, and AWS + self-host adapters. Shared by the hosted (Lambda/DynamoDB) and self-hosted (container/Postgres on k8s) deployments.",
   "type": "module",
   "main": "dist/index.js",
@@ -32,9 +31,13 @@
     "build": "tsc -p tsconfig.json",
     "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/AgentKitProject/agentkitmarket-core"
