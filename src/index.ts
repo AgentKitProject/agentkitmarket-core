@@ -1,16 +1,18 @@
 /**
  * @agentkitforge/market-core — public surface.
  *
- * Phase 0 exports the ports only. Subsequent phases add:
- *   - core router + services (the shared domain logic)
- *   - adapter factories (aws, selfhost)
- * Entrypoints are exposed via the package subpath exports
- * (./entrypoints/lambda | server | worker), not from this index.
+ * Phase 1 (in progress) exports the domain types + data-access ports. Subsequent
+ * steps add the core router + services (shared domain logic) and the adapter
+ * factories (aws, selfhost). Entrypoints are exposed via the package subpath
+ * exports (./entrypoints/lambda | server | worker), not from this index.
  */
+export type * from "./core/types.js";
 export type {
   ConfigProvider,
+  CatalogRepository,
+  AdminRepository,
+  PackageUploadService,
   ObjectStore,
   MessageQueue,
   ValidationJobMessage,
-  StorageRepo,
 } from "./core/ports.js";
