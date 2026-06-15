@@ -20,6 +20,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   AdminRepository,
   CatalogRepository,
+  OrgRepository,
   SubmissionValidationUpdate,
   ValidationJobUpdate,
 } from '../../core/ports.js';
@@ -30,10 +31,16 @@ import type {
   CreateSubmissionResult,
   KitRecord,
   KitVersionRecord,
+  KitVisibility,
+  Organization,
+  OrgInvite,
+  OrgMembership,
+  OrgRole,
   PublisherRecord,
   SubmissionRecord,
   ValidationJobRecord,
 } from '../../core/types.js';
+import { dedupeSlug, personalOrgSlugBase } from '../../core/services/orgs.js';
 import {
   PUBLIC_REVIEW_STATUS,
   PUBLIC_STATUS,
@@ -103,6 +110,8 @@ function rowToKit(row: any): KitRecord {
     summary: row.summary,
     publisherId: row.publisher_id,
     ownerUserId: str(row.owner_user_id),
+    ownerOrgId: str(row.owner_org_id),
+    visibility: str(row.visibility) as KitRecord['visibility'],
     publisher: json(row.publisher),
     status: row.status,
     validationStatus: row.validation_status,
@@ -182,6 +191,7 @@ function rowToSubmission(row: any): SubmissionRecord {
     reviewStatus: row.review_status,
     submissionType: str(row.submission_type),
     targetKitId: str(row.target_kit_id),
+    ownerOrgId: str(row.owner_org_id),
     // SQL NULL -> undefined, mirroring DynamoDB removeUndefinedValues (an
     // unset reviewNotes reads back as absent, not null).
     reviewNotes: row.review_notes === null || row.review_notes === undefined ? undefined : row.review_notes,
@@ -194,6 +204,44 @@ function rowToSubmission(row: any): SubmissionRecord {
     canceledAt: str(row.canceled_at),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function rowToOrganization(row: any): Organization {
+  return {
+    orgId: row.org_id,
+    slug: row.slug,
+    displayName: row.display_name,
+    type: row.type,
+    ownerUserId: row.owner_user_id,
+    handle: str(row.handle),
+    avatarInitials: str(row.avatar_initials),
+    verified: row.verified === null || row.verified === undefined ? undefined : row.verified,
+    workosOrganizationId: row.workos_organization_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToMembership(row: any): OrgMembership {
+  return {
+    orgId: row.org_id,
+    userId: row.user_id,
+    role: row.role,
+    status: row.status,
+    invitedByUserId: str(row.invited_by_user_id),
+    createdAt: row.created_at,
+  };
+}
+
+function rowToInvite(row: any): OrgInvite {
+  return {
+    orgId: row.org_id,
+    userId: str(row.user_id),
+    email: str(row.email),
+    role: row.role,
+    invitedByUserId: row.invited_by_user_id,
+    createdAt: row.created_at,
   };
 }
 
@@ -248,6 +296,7 @@ export function createPostgresCatalogRepository(pool: PgPool): CatalogRepository
       const result = await pool.query(
         `SELECT * FROM kits
            WHERE status = $1 AND validation_status = $2 AND review_status = $3
+             AND (visibility IS NULL OR visibility <> 'private')
            ORDER BY kit_id
            LIMIT $4 OFFSET $5`,
         [PUBLIC_STATUS, PUBLIC_VALIDATION_STATUS, PUBLIC_REVIEW_STATUS, limit, offset],
@@ -276,7 +325,8 @@ export function createPostgresCatalogRepository(pool: PgPool): CatalogRepository
 
       if (!kit || kit.status !== PUBLIC_STATUS
         || kit.validationStatus !== PUBLIC_VALIDATION_STATUS
-        || kit.reviewStatus !== PUBLIC_REVIEW_STATUS) {
+        || kit.reviewStatus !== PUBLIC_REVIEW_STATUS
+        || kit.visibility === 'private') {
         return { kit: undefined, publisher: undefined, versions: [] };
       }
 
@@ -463,6 +513,11 @@ export function createPostgresAdminRepository(pool: PgPool): AdminRepository {
           description: submission.listingDraft.description,
           publisherId: submission.publisherId,
           ownerUserId: existingKit?.ownerUserId ?? submission.submittedByUserId,
+          // Org ownership is set on first publish from the submission and never
+          // reassigned by a version_update (transfer is the explicit path).
+          ownerOrgId: existingKit?.ownerOrgId ?? submission.ownerOrgId,
+          // Visibility is preserved across re-publishes; defaults to public on first publish.
+          visibility: existingKit?.visibility ?? 'public',
           publisher: toKitPublisherSnapshot(submission.publisherId, submission.publisherSnapshot),
           status: PUBLIC_STATUS,
           validationStatus: PUBLIC_VALIDATION_STATUS,
@@ -686,9 +741,10 @@ async function insertSubmission(pool: PgQueryable, s: SubmissionRecord): Promise
        package_s3_key, file_name, package_file_name, package_size_bytes, sha256, content_type,
        schema_version, status, validation_status, review_status, submission_type, target_kit_id,
        review_notes, validation_job_id, expires_at, reviewed_at, published_at, archived_at,
-       canceled_at, created_at, updated_at, publisher_snapshot, listing_draft, validation_summary
+       canceled_at, created_at, updated_at, publisher_snapshot, listing_draft, validation_summary,
+       owner_org_id
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31
      )`,
     [
       s.submissionId, s.kitId, s.version ?? null, s.publisherId, s.submittedByUserId ?? null,
@@ -698,6 +754,7 @@ async function insertSubmission(pool: PgQueryable, s: SubmissionRecord): Promise
       s.reviewNotes ?? null, null, s.expiresAt ?? null, s.reviewedAt ?? null, s.publishedAt ?? null,
       s.archivedAt ?? null, s.canceledAt ?? null, s.createdAt, s.updatedAt,
       jb(s.publisherSnapshot), jb(s.listingDraft), jb(s.validationSummary),
+      s.ownerOrgId ?? null,
     ],
   );
 }
@@ -709,13 +766,14 @@ async function upsertKit(pool: PgQueryable, k: KitRecord): Promise<void> {
        review_status, current_version, verification_status, description, import_url, download_url,
        created_at, updated_at, published_at, removed_at, downloads, featured, featured_rank,
        publisher, categories, tags, badges, required_inputs, prepared_prompts, skills,
-       validation_summary, latest_version
+       validation_summary, latest_version, owner_org_id, visibility
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
      )
      ON CONFLICT (kit_id) DO UPDATE SET
        slug = EXCLUDED.slug, name = EXCLUDED.name, summary = EXCLUDED.summary,
        publisher_id = EXCLUDED.publisher_id, owner_user_id = EXCLUDED.owner_user_id,
+       owner_org_id = EXCLUDED.owner_org_id, visibility = EXCLUDED.visibility,
        status = EXCLUDED.status, validation_status = EXCLUDED.validation_status,
        review_status = EXCLUDED.review_status, current_version = EXCLUDED.current_version,
        verification_status = EXCLUDED.verification_status, description = EXCLUDED.description,
@@ -737,6 +795,7 @@ async function upsertKit(pool: PgQueryable, k: KitRecord): Promise<void> {
       k.featured ?? null, k.featuredRank ?? null,
       jb(k.publisher), jb(k.categories), jb(k.tags), jb(k.badges), jb(k.requiredInputs),
       jb(k.preparedPrompts), jb(k.skills), jb(k.validationSummary), jb(k.latestVersion),
+      k.ownerOrgId ?? null, k.visibility ?? null,
     ],
   );
 }
@@ -763,6 +822,203 @@ async function upsertKitVersion(pool: PgQueryable, v: KitVersionRecord): Promise
       v.contentType ?? null, v.releaseNotes ?? null, jb(v.validationSummary), jb(v.validationResult),
     ],
   );
+}
+
+// --- org repository (Market Phase 2) --------------------------------------------
+
+export function createPostgresOrgRepository(pool: PgPool): OrgRepository {
+  async function uniqueSlug(client: PgQueryable, base: string): Promise<string> {
+    const existing = await client.query(
+      `SELECT slug FROM organizations WHERE slug = $1 OR slug LIKE $2`,
+      [base, `${base}-%`],
+    );
+    return dedupeSlug(base, existing.rows.map((r) => r.slug as string));
+  }
+
+  async function insertOrgWithOwner(input: {
+    displayName: string;
+    ownerUserId: string;
+    type: 'personal' | 'team';
+    slug?: string;
+    handle?: string;
+  }): Promise<Organization> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const now = new Date().toISOString();
+      const base = (input.slug && input.slug.trim()) ? slugifyForUrl(input.slug) : slugifyForUrl(input.displayName);
+      const slug = await uniqueSlug(client, base);
+      const org: Organization = {
+        orgId: `org_${randomUUID()}`,
+        slug,
+        displayName: input.displayName,
+        type: input.type,
+        ownerUserId: input.ownerUserId,
+        handle: input.handle,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await client.query(
+        `INSERT INTO organizations
+           (org_id, slug, display_name, type, owner_user_id, handle, avatar_initials, verified, workos_organization_id, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [org.orgId, org.slug, org.displayName, org.type, org.ownerUserId, org.handle ?? null, null, null, null, org.createdAt, org.updatedAt],
+      );
+      await client.query(
+        `INSERT INTO org_memberships (org_id, user_id, role, status, invited_by_user_id, created_at)
+         VALUES ($1,$2,'owner','active',NULL,$3)`,
+        [org.orgId, org.ownerUserId, now],
+      );
+      await client.query('COMMIT');
+      return org;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  return {
+    async createOrg(input): Promise<Organization> {
+      return insertOrgWithOwner({
+        displayName: input.displayName,
+        ownerUserId: input.ownerUserId,
+        type: input.type ?? 'team',
+        slug: input.slug,
+        handle: input.handle,
+      });
+    },
+
+    async getOrg(orgId: string): Promise<Organization | undefined> {
+      const result = await pool.query(`SELECT * FROM organizations WHERE org_id = $1`, [orgId]);
+      return result.rows[0] ? rowToOrganization(result.rows[0]) : undefined;
+    },
+
+    async getOrgBySlug(slug: string): Promise<Organization | undefined> {
+      const result = await pool.query(`SELECT * FROM organizations WHERE slug = $1 LIMIT 1`, [slug]);
+      return result.rows[0] ? rowToOrganization(result.rows[0]) : undefined;
+    },
+
+    async ensurePersonalOrg(userId: string, displayName: string): Promise<Organization> {
+      const existing = await pool.query(
+        `SELECT * FROM organizations WHERE owner_user_id = $1 AND type = 'personal' LIMIT 1`,
+        [userId],
+      );
+      if (existing.rows[0]) {
+        return rowToOrganization(existing.rows[0]);
+      }
+      return insertOrgWithOwner({
+        displayName,
+        ownerUserId: userId,
+        type: 'personal',
+        slug: personalOrgSlugBase(displayName, userId),
+      });
+    },
+
+    async listOrgsForUser(userId: string): Promise<Organization[]> {
+      const result = await pool.query(
+        `SELECT o.* FROM organizations o
+           JOIN org_memberships m ON m.org_id = o.org_id
+           WHERE m.user_id = $1 AND m.status <> 'removed'
+           ORDER BY o.created_at`,
+        [userId],
+      );
+      return result.rows.map(rowToOrganization);
+    },
+
+    async getMembership(orgId: string, userId: string): Promise<OrgMembership | undefined> {
+      const result = await pool.query(
+        `SELECT * FROM org_memberships WHERE org_id = $1 AND user_id = $2`,
+        [orgId, userId],
+      );
+      return result.rows[0] ? rowToMembership(result.rows[0]) : undefined;
+    },
+
+    async listMembers(orgId: string): Promise<OrgMembership[]> {
+      const result = await pool.query(
+        `SELECT * FROM org_memberships WHERE org_id = $1 ORDER BY created_at`,
+        [orgId],
+      );
+      return result.rows.map(rowToMembership);
+    },
+
+    async addMember(orgId: string, userId: string, role: OrgRole, invitedBy: string): Promise<OrgMembership> {
+      const now = new Date().toISOString();
+      const membership: OrgMembership = {
+        orgId, userId, role, status: 'invited', invitedByUserId: invitedBy, createdAt: now,
+      };
+      await pool.query(
+        `INSERT INTO org_memberships (org_id, user_id, role, status, invited_by_user_id, created_at)
+         VALUES ($1,$2,$3,'invited',$4,$5)
+         ON CONFLICT (org_id, user_id) DO UPDATE SET
+           role = EXCLUDED.role, status = 'invited', invited_by_user_id = EXCLUDED.invited_by_user_id`,
+        [orgId, userId, role, invitedBy, now],
+      );
+      await pool.query(
+        `INSERT INTO org_invites (org_id, user_id, email, role, invited_by_user_id, created_at)
+         VALUES ($1,$2,NULL,$3,$4,$5)
+         ON CONFLICT (org_id, user_id) DO UPDATE SET
+           role = EXCLUDED.role, invited_by_user_id = EXCLUDED.invited_by_user_id`,
+        [orgId, userId, role, invitedBy, now],
+      );
+      return membership;
+    },
+
+    async acceptInvite(orgId: string, userId: string): Promise<OrgMembership | undefined> {
+      const result = await pool.query(
+        `UPDATE org_memberships SET status = 'active'
+           WHERE org_id = $1 AND user_id = $2 AND status = 'invited'
+           RETURNING *`,
+        [orgId, userId],
+      );
+      if (!result.rows[0]) {
+        return undefined;
+      }
+      await pool.query(`DELETE FROM org_invites WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
+      return rowToMembership(result.rows[0]);
+    },
+
+    async listInvitesForUser(userId: string): Promise<OrgInvite[]> {
+      const result = await pool.query(
+        `SELECT * FROM org_invites WHERE user_id = $1 ORDER BY created_at`,
+        [userId],
+      );
+      return result.rows.map(rowToInvite);
+    },
+
+    async removeMember(orgId: string, userId: string): Promise<void> {
+      await pool.query(
+        `UPDATE org_memberships SET status = 'removed' WHERE org_id = $1 AND user_id = $2`,
+        [orgId, userId],
+      );
+      await pool.query(`DELETE FROM org_invites WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
+    },
+
+    async setKitOwnerOrg(kitId: string, orgId: string): Promise<KitRecord | undefined> {
+      const result = await pool.query(
+        `UPDATE kits SET owner_org_id = $2, updated_at = $3 WHERE kit_id = $1 RETURNING *`,
+        [kitId, orgId, new Date().toISOString()],
+      );
+      return result.rows[0] ? rowToKit(result.rows[0]) : undefined;
+    },
+
+    async setKitVisibility(kitId: string, visibility: KitVisibility): Promise<KitRecord | undefined> {
+      const result = await pool.query(
+        `UPDATE kits SET visibility = $2, updated_at = $3 WHERE kit_id = $1 RETURNING *`,
+        [kitId, visibility, new Date().toISOString()],
+      );
+      return result.rows[0] ? rowToKit(result.rows[0]) : undefined;
+    },
+
+    async listKitsForOrg(orgId: string): Promise<KitRecord[]> {
+      const result = await pool.query(
+        `SELECT * FROM kits WHERE owner_org_id = $1 ORDER BY kit_id`,
+        [orgId],
+      );
+      return result.rows.map(rowToKit);
+    },
+  };
 }
 
 // --- pagination cursor (deterministic offset) -----------------------------------

@@ -8,6 +8,54 @@
 
 export type JsonRecord = Record<string, unknown>;
 
+/** Org-member role. Mirrors `OrgRole` in @agentkitforge/contracts. */
+export type OrgRole = 'owner' | 'admin' | 'member' | 'viewer';
+
+/** Membership lifecycle. Mirrors `OrgMembershipStatus` in @agentkitforge/contracts. */
+export type OrgMembershipStatus = 'active' | 'invited' | 'removed';
+
+/** Organization type. Mirrors `OrgType` in @agentkitforge/contracts. */
+export type OrgType = 'personal' | 'team';
+
+/** Kit visibility. Mirrors `KitVisibility` in @agentkitforge/contracts. */
+export type KitVisibility = 'public' | 'private';
+
+/** An organization that can own kits. Mirrors `Organization` in @agentkitforge/contracts. */
+export interface Organization {
+  orgId: string;
+  slug: string;
+  displayName: string;
+  type: OrgType;
+  ownerUserId: string;
+  handle?: string;
+  avatarInitials?: string;
+  verified?: boolean;
+  /** WorkOS Organization ID — null until SSO is configured (future). */
+  workosOrganizationId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A user's membership in an org. Mirrors `OrgMembership` in @agentkitforge/contracts. */
+export interface OrgMembership {
+  orgId: string;
+  userId: string;
+  role: OrgRole;
+  status: OrgMembershipStatus;
+  invitedByUserId?: string;
+  createdAt: string;
+}
+
+/** A pending org invite. Mirrors `OrgInvite` in @agentkitforge/contracts. */
+export interface OrgInvite {
+  orgId: string;
+  userId?: string;
+  email?: string;
+  role: OrgRole;
+  invitedByUserId: string;
+  createdAt: string;
+}
+
 export interface SafeInput {
   name: string;
   label?: string;
@@ -52,6 +100,10 @@ export interface KitRecord {
   summary: string;
   publisherId: string;
   ownerUserId?: string;
+  /** The organization that owns this kit (absent on legacy kits). */
+  ownerOrgId?: string;
+  /** Catalog visibility; `private` kits are excluded from the public catalog. Defaults to `public` when absent. */
+  visibility?: KitVisibility;
   publisher?: unknown;
   status: string;
   validationStatus: string;
@@ -143,6 +195,8 @@ export interface SubmissionRecord {
   reviewStatus: string;
   submissionType?: string;
   targetKitId?: string;
+  /** The organization that will own the published kit (absent → submitter's personal org). */
+  ownerOrgId?: string;
   reviewNotes?: string | null;
   listingDraft: ListingDraft;
   validationSummary?: JsonRecord;
@@ -178,6 +232,8 @@ export interface CreateSubmissionInput {
   listingDraft: ListingDraft;
   submissionType?: string;
   targetKitId?: string;
+  /** Optional org the submitter wants to own the kit; ignored unless they are a member. */
+  ownerOrgId?: string;
   allowDuplicate?: boolean;
 }
 

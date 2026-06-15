@@ -34,6 +34,7 @@ import {
 import {
   createDynamoCatalogRepository,
   createDynamoAdminRepository,
+  createDynamoOrgRepository,
   type DynamoClientOverrides,
 } from '../src/adapters/aws/index.js';
 import { runRepositoryContract, type ContractRepos } from './repository-contract.js';
@@ -46,6 +47,9 @@ const TABLES = {
   publishers: 'Publishers',
   submissions: 'Submissions',
   validationJobs: 'ValidationJobs',
+  organizations: 'Organizations',
+  orgMemberships: 'OrgMemberships',
+  orgInvites: 'OrgInvites',
 } as const;
 
 const S = 'S' as const;
@@ -141,6 +145,66 @@ const TABLE_DEFINITIONS: CreateTableCommandInput[] = [
       },
     ],
   },
+  {
+    TableName: TABLES.organizations,
+    BillingMode: 'PAY_PER_REQUEST',
+    KeySchema: [{ AttributeName: 'orgId', KeyType: 'HASH' }],
+    AttributeDefinitions: [
+      { AttributeName: 'orgId', AttributeType: S },
+      { AttributeName: 'slug', AttributeType: S },
+      { AttributeName: 'ownerUserId', AttributeType: S },
+    ],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'slug-index',
+        KeySchema: [{ AttributeName: 'slug', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'ownerUserId-index',
+        KeySchema: [{ AttributeName: 'ownerUserId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
+  {
+    TableName: TABLES.orgMemberships,
+    BillingMode: 'PAY_PER_REQUEST',
+    KeySchema: [
+      { AttributeName: 'orgId', KeyType: 'HASH' },
+      { AttributeName: 'userId', KeyType: 'RANGE' },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'orgId', AttributeType: S },
+      { AttributeName: 'userId', AttributeType: S },
+    ],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'userId-index',
+        KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
+  {
+    TableName: TABLES.orgInvites,
+    BillingMode: 'PAY_PER_REQUEST',
+    KeySchema: [
+      { AttributeName: 'orgId', KeyType: 'HASH' },
+      { AttributeName: 'userId', KeyType: 'RANGE' },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'orgId', AttributeType: S },
+      { AttributeName: 'userId', AttributeType: S },
+    ],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'userId-index',
+        KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
 ];
 
 if (!endpoint) {
@@ -196,6 +260,13 @@ if (!endpoint) {
       validationJobsTableName: TABLES.validationJobs,
       client: overrides,
     });
+    const org = createDynamoOrgRepository({
+      organizationsTableName: TABLES.organizations,
+      orgMembershipsTableName: TABLES.orgMemberships,
+      orgInvitesTableName: TABLES.orgInvites,
+      kitsTableName: TABLES.kits,
+      client: overrides,
+    });
 
     // Recreate tables per reset for a clean slate each test.
     const reset = async (): Promise<void> => {
@@ -203,6 +274,6 @@ if (!endpoint) {
       await createAllTables();
     };
 
-    return { catalog, admin, reset };
+    return { catalog, admin, org, reset };
   });
 }

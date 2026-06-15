@@ -25,6 +25,7 @@ import { EnvConfigProvider, loadSelfHostConfig } from '../core/config.js';
 import {
   createPostgresAdminRepository,
   createPostgresCatalogRepository,
+  createPostgresOrgRepository,
   type PgPool,
 } from '../adapters/selfhost/postgres.js';
 import { createMinioObjectStore } from '../adapters/selfhost/objectstore.js';
@@ -97,6 +98,7 @@ export async function startServer(): Promise<StartServerResult> {
 
   const repository = createPostgresCatalogRepository(pool as unknown as PgPool);
   const adminRepository = createPostgresAdminRepository(pool as unknown as PgPool);
+  const orgRepository = createPostgresOrgRepository(pool as unknown as PgPool);
   const packageUploadService = createSelfHostPackageUploadService({ objectStore, queue });
 
   const allowedOrigins = config.allowedOrigins.length > 0 ? config.allowedOrigins : undefined;
@@ -105,6 +107,7 @@ export async function startServer(): Promise<StartServerResult> {
     void handleRequest(req, res, {
       repository,
       adminRepository,
+      orgRepository,
       packageUploadService,
       allowedOrigins,
       adminKey: config.adminKey,
@@ -132,6 +135,7 @@ export async function startServer(): Promise<StartServerResult> {
 interface ServerDeps {
   repository: ReturnType<typeof createPostgresCatalogRepository>;
   adminRepository: ReturnType<typeof createPostgresAdminRepository>;
+  orgRepository: ReturnType<typeof createPostgresOrgRepository>;
   packageUploadService: ReturnType<typeof createSelfHostPackageUploadService>;
   allowedOrigins?: string[];
   adminKey: string;

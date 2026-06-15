@@ -35,6 +35,16 @@ const ROUTES: RoutePattern[] = [
   { method: 'POST', template: '/users/kits/{kitId}/remove' },
   { method: 'POST', template: '/admin/kits/{kitId}/download-url' },
   { method: 'POST', template: '/admin/kits/by-slug/{slug}/download-url' },
+  // Organizations (Market Phase 2, Seam B).
+  { method: 'POST', template: '/admin/orgs' },
+  { method: 'GET', template: '/admin/users/{userId}/orgs' },
+  { method: 'GET', template: '/admin/orgs/{orgId}/members' },
+  { method: 'POST', template: '/admin/orgs/{orgId}/members' },
+  { method: 'DELETE', template: '/admin/orgs/{orgId}/members/{userId}' },
+  { method: 'GET', template: '/admin/users/{userId}/invites' },
+  { method: 'POST', template: '/admin/orgs/{orgId}/invites/{userId}/accept' },
+  { method: 'POST', template: '/admin/kits/{kitId}/transfer' },
+  { method: 'POST', template: '/admin/kits/{kitId}/visibility' },
 ];
 
 export interface MatchedRoute {

@@ -16,6 +16,7 @@ import { GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectComman
 import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import {
   BatchGetCommand,
+  DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
@@ -29,6 +30,7 @@ import type {
   AdminRepository,
   CatalogRepository,
   ObjectStore,
+  OrgRepository,
   PackageUploadService,
   SubmissionValidationUpdate,
   ValidationJobUpdate,
@@ -40,10 +42,16 @@ import type {
   CreateSubmissionResult,
   KitRecord,
   KitVersionRecord,
+  KitVisibility,
+  Organization,
+  OrgInvite,
+  OrgMembership,
+  OrgRole,
   PublisherRecord,
   SubmissionRecord,
   ValidationJobRecord,
 } from '../../core/types.js';
+import { dedupeSlug, personalOrgSlugBase } from '../../core/services/orgs.js';
 import {
   ARCHIVED_STATUS,
   CANCELED_STATUS,
@@ -134,7 +142,7 @@ export function createDynamoCatalogRepository(config: DynamoCatalogConfig): Cata
     async listKits(limit: number, nextToken: string | undefined): Promise<CatalogPage> {
       const result = await dynamo.send(new ScanCommand({
         TableName: kitsTableName,
-        FilterExpression: '#status = :status AND validationStatus = :validationStatus AND reviewStatus = :reviewStatus',
+        FilterExpression: '#status = :status AND validationStatus = :validationStatus AND reviewStatus = :reviewStatus AND (attribute_not_exists(visibility) OR visibility <> :private)',
         ExpressionAttributeNames: {
           '#status': 'status',
         },
@@ -142,6 +150,7 @@ export function createDynamoCatalogRepository(config: DynamoCatalogConfig): Cata
           ':status': PUBLIC_STATUS,
           ':validationStatus': PUBLIC_VALIDATION_STATUS,
           ':reviewStatus': PUBLIC_REVIEW_STATUS,
+          ':private': 'private',
         },
         Limit: limit,
         ExclusiveStartKey: decodePageToken(nextToken),
@@ -168,7 +177,7 @@ export function createDynamoCatalogRepository(config: DynamoCatalogConfig): Cata
         Limit: 1,
       }));
 
-      const kit = (result.Items ?? []).filter(isKitRecord).find(isPublicKit);
+      const kit = (result.Items ?? []).filter(isKitRecord).find((k) => isPublicKit(k) && k.visibility !== 'private');
 
       if (!kit) {
         return {
@@ -418,6 +427,11 @@ export function createDynamoAdminRepository(config: DynamoAdminConfig): AdminRep
         // ownerUserId is set on first publish and never reassigned: a version_update
         // keeps the original owner (already verified to match the submitter).
         ownerUserId: existingKit?.ownerUserId ?? submission.submittedByUserId,
+        // Org ownership is set on first publish from the submission and never
+        // reassigned by a version_update (transfer is the explicit path).
+        ownerOrgId: existingKit?.ownerOrgId ?? submission.ownerOrgId,
+        // Visibility is preserved across re-publishes; defaults to public on first publish.
+        visibility: existingKit?.visibility ?? 'public',
         publisher: toKitPublisherSnapshot(submission.publisherId, submission.publisherSnapshot),
         status: PUBLIC_STATUS,
         validationStatus: PUBLIC_VALIDATION_STATUS,
@@ -686,6 +700,270 @@ async function updateDynamoItem(
     ExpressionAttributeNames: Object.fromEntries(entries.map(([name]) => [`#${name}`, name])),
     ExpressionAttributeValues: Object.fromEntries(entries.map(([name, value]) => [`:${name}`, value])),
   }));
+}
+
+/** Config for the DynamoDB org repository (Market Phase 2). */
+export interface DynamoOrgConfig {
+  organizationsTableName: string;
+  orgMembershipsTableName: string;
+  orgInvitesTableName: string;
+  kitsTableName: string;
+  /** Optional client overrides (dynamodb-local). Omit for hosted. */
+  client?: DynamoClientOverrides;
+}
+
+function isOrganization(item: unknown): item is Organization {
+  return typeof item === 'object' && item !== null
+    && typeof (item as { orgId?: unknown }).orgId === 'string';
+}
+
+function isMembership(item: unknown): item is OrgMembership {
+  return typeof item === 'object' && item !== null
+    && typeof (item as { orgId?: unknown }).orgId === 'string'
+    && typeof (item as { userId?: unknown }).userId === 'string'
+    && typeof (item as { role?: unknown }).role === 'string';
+}
+
+function isInvite(item: unknown): item is OrgInvite {
+  return typeof item === 'object' && item !== null
+    && typeof (item as { orgId?: unknown }).orgId === 'string'
+    && typeof (item as { invitedByUserId?: unknown }).invitedByUserId === 'string';
+}
+
+export function createDynamoOrgRepository(config: DynamoOrgConfig): OrgRepository {
+  const { organizationsTableName, orgMembershipsTableName, orgInvitesTableName, kitsTableName } = config;
+  const dynamo = buildDynamoDocumentClient(config.client);
+
+  async function takenSlugs(base: string): Promise<string[]> {
+    // Scan is acceptable here (org counts are small relative to kits); we only
+    // need exact `base` and `base-N` matches to compute the dedupe suffix.
+    const result = await dynamo.send(new ScanCommand({
+      TableName: organizationsTableName,
+      FilterExpression: 'slug = :base OR begins_with(slug, :prefix)',
+      ExpressionAttributeValues: { ':base': base, ':prefix': `${base}-` },
+    }));
+    return (result.Items ?? []).filter(isOrganization).map((org) => org.slug);
+  }
+
+  async function insertOrgWithOwner(input: {
+    displayName: string;
+    ownerUserId: string;
+    type: 'personal' | 'team';
+    slug?: string;
+    handle?: string;
+  }): Promise<Organization> {
+    const now = new Date().toISOString();
+    const base = (input.slug && input.slug.trim()) ? slugifyForUrl(input.slug) : slugifyForUrl(input.displayName);
+    const slug = dedupeSlug(base, await takenSlugs(base));
+    const org: Organization = {
+      orgId: `org_${randomUUID()}`,
+      slug,
+      displayName: input.displayName,
+      type: input.type,
+      ownerUserId: input.ownerUserId,
+      handle: input.handle,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await dynamo.send(new PutCommand({
+      TableName: organizationsTableName,
+      Item: org,
+      ConditionExpression: 'attribute_not_exists(orgId)',
+    }));
+    const ownerMembership: OrgMembership = {
+      orgId: org.orgId,
+      userId: org.ownerUserId,
+      role: 'owner',
+      status: 'active',
+      createdAt: now,
+    };
+    await dynamo.send(new PutCommand({
+      TableName: orgMembershipsTableName,
+      Item: ownerMembership,
+    }));
+    return org;
+  }
+
+  return {
+    async createOrg(input): Promise<Organization> {
+      return insertOrgWithOwner({
+        displayName: input.displayName,
+        ownerUserId: input.ownerUserId,
+        type: input.type ?? 'team',
+        slug: input.slug,
+        handle: input.handle,
+      });
+    },
+
+    async getOrg(orgId: string): Promise<Organization | undefined> {
+      const result = await dynamo.send(new GetCommand({ TableName: organizationsTableName, Key: { orgId } }));
+      return isOrganization(result.Item) ? result.Item : undefined;
+    },
+
+    async getOrgBySlug(slug: string): Promise<Organization | undefined> {
+      const result = await dynamo.send(new QueryCommand({
+        TableName: organizationsTableName,
+        IndexName: 'slug-index',
+        KeyConditionExpression: 'slug = :slug',
+        ExpressionAttributeValues: { ':slug': slug },
+        Limit: 1,
+      }));
+      return (result.Items ?? []).filter(isOrganization)[0];
+    },
+
+    async ensurePersonalOrg(userId: string, displayName: string): Promise<Organization> {
+      const existing = await dynamo.send(new QueryCommand({
+        TableName: organizationsTableName,
+        IndexName: 'ownerUserId-index',
+        KeyConditionExpression: 'ownerUserId = :userId',
+        ExpressionAttributeValues: { ':userId': userId },
+      }));
+      const personal = (existing.Items ?? []).filter(isOrganization).find((org) => org.type === 'personal');
+      if (personal) {
+        return personal;
+      }
+      return insertOrgWithOwner({
+        displayName,
+        ownerUserId: userId,
+        type: 'personal',
+        slug: personalOrgSlugBase(displayName, userId),
+      });
+    },
+
+    async listOrgsForUser(userId: string): Promise<Organization[]> {
+      const memberships = await dynamo.send(new QueryCommand({
+        TableName: orgMembershipsTableName,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :userId',
+        ExpressionAttributeValues: { ':userId': userId },
+      }));
+      const orgIds = (memberships.Items ?? [])
+        .filter(isMembership)
+        .filter((m) => m.status !== 'removed')
+        .map((m) => m.orgId);
+      const orgs = await Promise.all(orgIds.map((orgId) => dynamo.send(new GetCommand({
+        TableName: organizationsTableName,
+        Key: { orgId },
+      }))));
+      return orgs
+        .map((result) => result.Item)
+        .filter(isOrganization)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    },
+
+    async getMembership(orgId: string, userId: string): Promise<OrgMembership | undefined> {
+      const result = await dynamo.send(new GetCommand({
+        TableName: orgMembershipsTableName,
+        Key: { orgId, userId },
+      }));
+      return isMembership(result.Item) ? result.Item : undefined;
+    },
+
+    async listMembers(orgId: string): Promise<OrgMembership[]> {
+      const result = await dynamo.send(new QueryCommand({
+        TableName: orgMembershipsTableName,
+        KeyConditionExpression: 'orgId = :orgId',
+        ExpressionAttributeValues: { ':orgId': orgId },
+      }));
+      return (result.Items ?? [])
+        .filter(isMembership)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    },
+
+    async addMember(orgId: string, userId: string, role: OrgRole, invitedBy: string): Promise<OrgMembership> {
+      const now = new Date().toISOString();
+      const membership: OrgMembership = {
+        orgId, userId, role, status: 'invited', invitedByUserId: invitedBy, createdAt: now,
+      };
+      await dynamo.send(new PutCommand({ TableName: orgMembershipsTableName, Item: membership }));
+      const invite: OrgInvite = { orgId, userId, role, invitedByUserId: invitedBy, createdAt: now };
+      await dynamo.send(new PutCommand({ TableName: orgInvitesTableName, Item: invite }));
+      return membership;
+    },
+
+    async acceptInvite(orgId: string, userId: string): Promise<OrgMembership | undefined> {
+      try {
+        const result = await dynamo.send(new UpdateCommand({
+          TableName: orgMembershipsTableName,
+          Key: { orgId, userId },
+          UpdateExpression: 'SET #status = :active',
+          ConditionExpression: 'attribute_exists(orgId) AND #status = :invited',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: { ':active': 'active', ':invited': 'invited' },
+          ReturnValues: 'ALL_NEW',
+        }));
+        await dynamo.send(new DeleteCommand({ TableName: orgInvitesTableName, Key: { orgId, userId } }));
+        return isMembership(result.Attributes) ? result.Attributes : undefined;
+      } catch (error) {
+        if ((error as { name?: string })?.name === 'ConditionalCheckFailedException') return undefined;
+        throw error;
+      }
+    },
+
+    async listInvitesForUser(userId: string): Promise<OrgInvite[]> {
+      const result = await dynamo.send(new QueryCommand({
+        TableName: orgInvitesTableName,
+        IndexName: 'userId-index',
+        KeyConditionExpression: 'userId = :userId',
+        ExpressionAttributeValues: { ':userId': userId },
+      }));
+      return (result.Items ?? [])
+        .filter(isInvite)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    },
+
+    async removeMember(orgId: string, userId: string): Promise<void> {
+      await dynamo.send(new UpdateCommand({
+        TableName: orgMembershipsTableName,
+        Key: { orgId, userId },
+        UpdateExpression: 'SET #status = :removed',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':removed': 'removed' },
+      }));
+      await dynamo.send(new DeleteCommand({ TableName: orgInvitesTableName, Key: { orgId, userId } }));
+    },
+
+    async setKitOwnerOrg(kitId: string, orgId: string): Promise<KitRecord | undefined> {
+      const existing = await dynamo.send(new GetCommand({ TableName: kitsTableName, Key: { kitId } }));
+      if (!isKitRecord(existing.Item)) {
+        return undefined;
+      }
+      const result = await dynamo.send(new UpdateCommand({
+        TableName: kitsTableName,
+        Key: { kitId },
+        UpdateExpression: 'SET ownerOrgId = :orgId, updatedAt = :updatedAt',
+        ExpressionAttributeValues: { ':orgId': orgId, ':updatedAt': new Date().toISOString() },
+        ReturnValues: 'ALL_NEW',
+      }));
+      return isKitRecord(result.Attributes) ? result.Attributes : undefined;
+    },
+
+    async setKitVisibility(kitId: string, visibility: KitVisibility): Promise<KitRecord | undefined> {
+      const existing = await dynamo.send(new GetCommand({ TableName: kitsTableName, Key: { kitId } }));
+      if (!isKitRecord(existing.Item)) {
+        return undefined;
+      }
+      const result = await dynamo.send(new UpdateCommand({
+        TableName: kitsTableName,
+        Key: { kitId },
+        UpdateExpression: 'SET visibility = :visibility, updatedAt = :updatedAt',
+        ExpressionAttributeValues: { ':visibility': visibility, ':updatedAt': new Date().toISOString() },
+        ReturnValues: 'ALL_NEW',
+      }));
+      return isKitRecord(result.Attributes) ? result.Attributes : undefined;
+    },
+
+    async listKitsForOrg(orgId: string): Promise<KitRecord[]> {
+      const result = await dynamo.send(new ScanCommand({
+        TableName: kitsTableName,
+        FilterExpression: 'ownerOrgId = :orgId',
+        ExpressionAttributeValues: { ':orgId': orgId },
+      }));
+      return (result.Items ?? [])
+        .filter(isKitRecord)
+        .sort((a, b) => a.kitId.localeCompare(b.kitId));
+    },
+  };
 }
 
 export function createAwsPackageUploadService(config: AwsPackageUploadConfig): PackageUploadService {

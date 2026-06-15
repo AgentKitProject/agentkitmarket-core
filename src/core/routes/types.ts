@@ -11,6 +11,7 @@
 import type {
   AdminRepository,
   CatalogRepository,
+  OrgRepository,
   PackageUploadService,
 } from '../ports.js';
 
@@ -42,6 +43,7 @@ export interface CoreResponse {
 export interface RouterDeps {
   repository: CatalogRepository;
   adminRepository?: AdminRepository;
+  orgRepository?: OrgRepository;
   packageUploadService?: PackageUploadService;
   allowedOrigins?: string[];
   adminKey?: string;

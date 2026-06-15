@@ -16,14 +16,25 @@ import type {
   JsonRecord,
   CreateSubmissionInput,
   KitRecord,
+  KitVisibility,
+  OrgRole,
   PublisherRecord,
   SubmissionRecord,
 } from '../types.js';
 import type {
   AdminRepository,
   CatalogRepository,
+  OrgRepository,
   PackageUploadService,
 } from '../ports.js';
+import {
+  acceptOrgInviteRequestSchema,
+  addOrgMemberRequestSchema,
+  createOrgRequestSchema,
+  removeOrgMemberRequestSchema,
+  setKitVisibilityRequestSchema,
+  transferKitRequestSchema,
+} from '@agentkitforge/contracts';
 import type { CoreRequest, CoreResponse, RouterDeps } from './types.js';
 import {
   ADMIN_HEADER,
@@ -120,7 +131,7 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
       const packageUploadService = deps.packageUploadService as PackageUploadService;
 
       if (request.method === 'POST' && request.resource === '/admin/submissions/upload-url') {
-        return createSubmissionUploadUrl(request, adminRepository, packageUploadService, allowedOrigins);
+        return createSubmissionUploadUrl(request, adminRepository, packageUploadService, allowedOrigins, deps.orgRepository);
       }
 
       if (request.method === 'POST' && request.resource === '/admin/submissions/{submissionId}/validate') {
@@ -148,7 +159,7 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
       }
 
       if (request.method === 'POST' && request.resource === '/admin/submissions/{submissionId}/publish') {
-        return publishAdminSubmission(request, adminRepository, allowedOrigins);
+        return publishAdminSubmission(request, adminRepository, allowedOrigins, deps.orgRepository);
       }
 
       if (request.method === 'GET' && request.resource === '/admin/submissions') {
@@ -172,7 +183,7 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
       }
 
       if (request.method === 'POST' && request.resource === '/users/kits/{kitId}/remove') {
-        return removeOwnKit(request, adminRepository, allowedOrigins);
+        return removeOwnKit(request, adminRepository, allowedOrigins, deps.orgRepository);
       }
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/download-url') {
@@ -181,6 +192,46 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
 
       if (request.method === 'POST' && request.resource === '/admin/kits/by-slug/{slug}/download-url') {
         return createKitDownloadUrlBySlug(request, adminRepository, packageUploadService, allowedOrigins);
+      }
+
+      // --- Organizations (Market Phase 2, Seam B) ---
+      const orgRepository = deps.orgRepository;
+
+      if (request.method === 'POST' && request.resource === '/admin/orgs') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => createOrgHandler(request, repo, allowedOrigins));
+      }
+
+      if (request.method === 'GET' && request.resource === '/admin/users/{userId}/orgs') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => listUserOrgsHandler(request, repo, allowedOrigins));
+      }
+
+      if (request.resource === '/admin/orgs/{orgId}/members') {
+        if (request.method === 'GET') {
+          return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => listMembersHandler(request, repo, allowedOrigins));
+        }
+        if (request.method === 'POST') {
+          return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => addMemberHandler(request, repo, allowedOrigins));
+        }
+      }
+
+      if (request.method === 'DELETE' && request.resource === '/admin/orgs/{orgId}/members/{userId}') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => removeMemberHandler(request, repo, allowedOrigins));
+      }
+
+      if (request.method === 'GET' && request.resource === '/admin/users/{userId}/invites') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => listUserInvitesHandler(request, repo, allowedOrigins));
+      }
+
+      if (request.method === 'POST' && request.resource === '/admin/orgs/{orgId}/invites/{userId}/accept') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => acceptInviteHandler(request, repo, allowedOrigins));
+      }
+
+      if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/transfer') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => transferKitHandler(request, adminRepository, repo, allowedOrigins));
+      }
+
+      if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/visibility') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => setKitVisibilityHandler(request, adminRepository, repo, allowedOrigins));
       }
     }
 
@@ -251,6 +302,7 @@ async function createSubmissionUploadUrl(
   adminRepository: AdminRepository,
   packageUploadService: PackageUploadService,
   allowedOrigins: string[],
+  orgRepository: OrgRepository | undefined,
 ): Promise<CoreResponse> {
   const body = parseJsonBody(request);
   const validationError = validateUploadUrlRequest(body);
@@ -306,6 +358,14 @@ async function createSubmissionUploadUrl(
         reviewStatus: duplicate.reviewStatus,
       });
     }
+  }
+
+  // Resolve the owning org. New kits default to the submitter's personal org
+  // (auto-created on first submit). An explicit ownerOrgId is honored only when
+  // the submitter is an active member of that org; otherwise it is dropped.
+  if (orgRepository && input.submittedByUserId) {
+    const resolvedOrgId = await resolveSubmissionOwnerOrg(orgRepository, input);
+    input.ownerOrgId = resolvedOrgId;
   }
 
   const result = await adminRepository.createSubmission(input);
@@ -544,13 +604,14 @@ async function publishAdminSubmission(
   request: CoreRequest,
   adminRepository: AdminRepository,
   allowedOrigins: string[],
+  orgRepository: OrgRepository | undefined,
 ): Promise<CoreResponse> {
   const submissionId = request.pathParameters?.submissionId;
   if (!submissionId) {
     return json(request, allowedOrigins, 400, { message: 'Missing submissionId' });
   }
 
-  const submission = await adminRepository.getSubmission(submissionId);
+  let submission = await adminRepository.getSubmission(submissionId);
   if (!submission) {
     return json(request, allowedOrigins, 404, { message: 'Submission not found' });
   }
@@ -574,7 +635,19 @@ async function publishAdminSubmission(
     }
 
     // Re-verify ownership at publish time, not just at submission time.
-    if (!submission.submittedByUserId || targetKit.ownerUserId !== submission.submittedByUserId) {
+    // Org-aware: an active owner/admin/member of the kit's owning org may publish
+    // a new version. Legacy kits (no ownerOrgId) fall back to the recorded owner.
+    const submitter = submission.submittedByUserId;
+    if (!submitter) {
+      return json(request, allowedOrigins, 403, { message: 'Only the kit owner can publish a new version' });
+    }
+    let mayPublish = targetKit.ownerUserId === submitter;
+    if (!mayPublish && orgRepository) {
+      const membership = await resolveKitMembership(orgRepository, targetKit, submitter);
+      // owner/admin/member may publish; viewer is read-only.
+      mayPublish = !!membership && membership.role !== 'viewer';
+    }
+    if (!mayPublish) {
       return json(request, allowedOrigins, 403, { message: 'Only the kit owner can publish a new version' });
     }
 
@@ -591,6 +664,16 @@ async function publishAdminSubmission(
         message: `New version must be greater than the current version (${targetKit.currentVersion})`,
       });
     }
+  }
+
+  // Auto-create the submitter's personal org and default the kit's owning org to
+  // it on first publish (new_kit) when no ownerOrgId was carried on the submission.
+  if (!isVersionUpdate && orgRepository && submission.submittedByUserId && !submission.ownerOrgId) {
+    const personal = await orgRepository.ensurePersonalOrg(
+      submission.submittedByUserId,
+      submission.publisherId || submission.submittedByUserId,
+    );
+    submission = { ...submission, ownerOrgId: personal.orgId };
   }
 
   // sha256 duplicate protection. The sha256 here is server-computed by the
@@ -711,6 +794,7 @@ async function removeOwnKit(
   request: CoreRequest,
   adminRepository: AdminRepository,
   allowedOrigins: string[],
+  orgRepository: OrgRepository | undefined,
 ): Promise<CoreResponse> {
   const kitId = request.pathParameters?.kitId;
   if (!kitId) {
@@ -727,7 +811,14 @@ async function removeOwnKit(
     return json(request, allowedOrigins, 404, { message: 'Kit not found' });
   }
 
-  if (existingKit.ownerUserId !== actorUserId) {
+  // Org-aware: an active owner/admin of the kit's owning org may remove it.
+  // Legacy kits (no ownerOrgId) fall back to the recorded ownerUserId.
+  let mayRemove = existingKit.ownerUserId === actorUserId;
+  if (!mayRemove && orgRepository) {
+    const membership = await resolveKitMembership(orgRepository, existingKit, actorUserId);
+    mayRemove = !!membership && MANAGE_ROLES.has(membership.role);
+  }
+  if (!mayRemove) {
     return json(request, allowedOrigins, 403, { message: 'Forbidden' });
   }
 
@@ -806,6 +897,312 @@ async function createKitDownloadUrl(
     sha256: typeof version.sha256 === 'string' ? version.sha256 : null,
     downloadUrl,
     expiresIn: DOWNLOAD_URL_EXPIRES_IN_SECONDS,
+  });
+}
+
+// --- Organizations (Market Phase 2) ---------------------------------------------
+
+/** Roles allowed to manage members, transfer, set visibility, publish, remove. */
+const MANAGE_ROLES: ReadonlySet<OrgRole> = new Set<OrgRole>(['owner', 'admin']);
+
+function withOrgRepo(
+  request: CoreRequest,
+  allowedOrigins: string[],
+  orgRepository: OrgRepository | undefined,
+  handler: (repo: OrgRepository) => Promise<CoreResponse>,
+): Promise<CoreResponse> {
+  if (!orgRepository) {
+    return Promise.resolve(json(request, allowedOrigins, 500, {
+      message: 'Organizations are not configured',
+    }));
+  }
+  return handler(orgRepository);
+}
+
+/**
+ * Resolves the org an actor must be an active member of to act on a kit.
+ * Falls back to the legacy owner's personal org when the kit has no ownerOrgId.
+ * Returns the active membership if the actor may act, else undefined.
+ */
+async function resolveKitMembership(
+  orgRepository: OrgRepository,
+  kit: KitRecord,
+  actorUserId: string,
+): Promise<{ orgId: string; role: OrgRole } | undefined> {
+  if (kit.ownerOrgId) {
+    const membership = await orgRepository.getMembership(kit.ownerOrgId, actorUserId);
+    if (membership && membership.status === 'active') {
+      return { orgId: kit.ownerOrgId, role: membership.role };
+    }
+    return undefined;
+  }
+  // Legacy kit: only the recorded owner may act (their implicit personal org).
+  if (kit.ownerUserId && kit.ownerUserId === actorUserId) {
+    return { orgId: '', role: 'owner' };
+  }
+  return undefined;
+}
+
+/**
+ * Resolves the org that should own a kit produced by this submission.
+ * Auto-creates the submitter's personal org and uses it by default; honors an
+ * explicit ownerOrgId only when the submitter is an active member there.
+ */
+async function resolveSubmissionOwnerOrg(
+  orgRepository: OrgRepository,
+  input: CreateSubmissionInput,
+): Promise<string | undefined> {
+  const userId = input.submittedByUserId;
+  if (!userId) {
+    return undefined;
+  }
+  const personal = await orgRepository.ensurePersonalOrg(userId, input.publisherId || userId);
+
+  if (input.ownerOrgId && input.ownerOrgId !== personal.orgId) {
+    const membership = await orgRepository.getMembership(input.ownerOrgId, userId);
+    if (membership && membership.status === 'active') {
+      return input.ownerOrgId;
+    }
+  }
+  return personal.orgId;
+}
+
+async function createOrgHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const body = parseJsonBody(request) as Record<string, unknown> | undefined;
+  const actorUserId = typeof body?.ownerUserId === 'string' ? body.ownerUserId : undefined;
+  if (!actorUserId) {
+    return json(request, allowedOrigins, 400, { message: 'ownerUserId is required' });
+  }
+  const parsed = createOrgRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid org payload' });
+  }
+  const org = await orgRepository.createOrg({
+    displayName: parsed.data.displayName,
+    ownerUserId: actorUserId,
+    type: 'team',
+    slug: parsed.data.slug,
+    handle: parsed.data.handle,
+  });
+  return json(request, allowedOrigins, 201, { item: org });
+}
+
+async function listUserOrgsHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const userId = request.pathParameters?.userId;
+  if (!userId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing userId' });
+  }
+  const orgs = await orgRepository.listOrgsForUser(userId);
+  return json(request, allowedOrigins, 200, { items: orgs });
+}
+
+async function listMembersHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const orgId = request.pathParameters?.orgId;
+  if (!orgId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing orgId' });
+  }
+  const org = await orgRepository.getOrg(orgId);
+  if (!org) {
+    return json(request, allowedOrigins, 404, { message: 'Organization not found' });
+  }
+  const members = await orgRepository.listMembers(orgId);
+  return json(request, allowedOrigins, 200, { items: members });
+}
+
+async function addMemberHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const orgId = request.pathParameters?.orgId;
+  if (!orgId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing orgId' });
+  }
+  const body = parseJsonBody(request) as Record<string, unknown> | undefined;
+  const actorUserId = typeof body?.actorUserId === 'string' ? body.actorUserId : undefined;
+  if (!actorUserId) {
+    return json(request, allowedOrigins, 400, { message: 'actorUserId is required' });
+  }
+  const parsed = addOrgMemberRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid member payload' });
+  }
+
+  const org = await orgRepository.getOrg(orgId);
+  if (!org) {
+    return json(request, allowedOrigins, 404, { message: 'Organization not found' });
+  }
+  const actorMembership = await orgRepository.getMembership(orgId, actorUserId);
+  if (!actorMembership || actorMembership.status !== 'active' || !MANAGE_ROLES.has(actorMembership.role)) {
+    return json(request, allowedOrigins, 403, { message: 'Only an owner or admin can manage members' });
+  }
+
+  const membership = await orgRepository.addMember(orgId, parsed.data.userId, parsed.data.role, actorUserId);
+  return json(request, allowedOrigins, 201, { item: membership });
+}
+
+async function removeMemberHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const orgId = request.pathParameters?.orgId;
+  const userId = request.pathParameters?.userId;
+  if (!orgId || !userId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing orgId or userId' });
+  }
+  const body = parseJsonBody(request) as Record<string, unknown> | undefined;
+  const actorUserId = typeof body?.actorUserId === 'string' ? body.actorUserId : undefined;
+  if (!actorUserId) {
+    return json(request, allowedOrigins, 400, { message: 'actorUserId is required' });
+  }
+  const parsed = removeOrgMemberRequestSchema.safeParse({ userId });
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid remove payload' });
+  }
+
+  const org = await orgRepository.getOrg(orgId);
+  if (!org) {
+    return json(request, allowedOrigins, 404, { message: 'Organization not found' });
+  }
+  const actorMembership = await orgRepository.getMembership(orgId, actorUserId);
+  if (!actorMembership || actorMembership.status !== 'active' || !MANAGE_ROLES.has(actorMembership.role)) {
+    return json(request, allowedOrigins, 403, { message: 'Only an owner or admin can manage members' });
+  }
+  if (userId === org.ownerUserId) {
+    return json(request, allowedOrigins, 409, { message: 'The org owner cannot be removed' });
+  }
+
+  await orgRepository.removeMember(orgId, userId);
+  return json(request, allowedOrigins, 200, { ok: true });
+}
+
+async function listUserInvitesHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const userId = request.pathParameters?.userId;
+  if (!userId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing userId' });
+  }
+  const invites = await orgRepository.listInvitesForUser(userId);
+  return json(request, allowedOrigins, 200, { items: invites });
+}
+
+async function acceptInviteHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const orgId = request.pathParameters?.orgId;
+  const userId = request.pathParameters?.userId;
+  if (!orgId || !userId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing orgId or userId' });
+  }
+  const parsed = acceptOrgInviteRequestSchema.safeParse({ orgId });
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid accept payload' });
+  }
+  const membership = await orgRepository.acceptInvite(orgId, userId);
+  if (!membership) {
+    return json(request, allowedOrigins, 404, { message: 'No pending invite for this user' });
+  }
+  return json(request, allowedOrigins, 200, { item: membership });
+}
+
+async function transferKitHandler(
+  request: CoreRequest,
+  adminRepository: AdminRepository,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const kitId = request.pathParameters?.kitId;
+  if (!kitId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing kitId' });
+  }
+  const body = parseJsonBody(request) as Record<string, unknown> | undefined;
+  const actorUserId = typeof body?.actorUserId === 'string' ? body.actorUserId : undefined;
+  if (!actorUserId) {
+    return json(request, allowedOrigins, 400, { message: 'actorUserId is required' });
+  }
+  const parsed = transferKitRequestSchema.safeParse({ kitId, targetOrgId: body?.targetOrgId });
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid transfer payload' });
+  }
+
+  const kit = await adminRepository.getKit(kitId);
+  if (!kit) {
+    return json(request, allowedOrigins, 404, { message: 'Kit not found' });
+  }
+
+  // Actor must manage the kit's current owning org (owner/admin).
+  const current = await resolveKitMembership(orgRepository, kit, actorUserId);
+  if (!current || !MANAGE_ROLES.has(current.role)) {
+    return json(request, allowedOrigins, 403, { message: 'Only an owner or admin of the kit can transfer it' });
+  }
+
+  // Actor must be an active member of the target org.
+  const target = await orgRepository.getOrg(parsed.data.targetOrgId);
+  if (!target) {
+    return json(request, allowedOrigins, 404, { message: 'Target organization not found' });
+  }
+  const targetMembership = await orgRepository.getMembership(parsed.data.targetOrgId, actorUserId);
+  if (!targetMembership || targetMembership.status !== 'active') {
+    return json(request, allowedOrigins, 403, { message: 'You must be a member of the target organization' });
+  }
+
+  // Sets ownerOrgId only; frozen publisher snapshots on published versions are untouched.
+  const updated = await orgRepository.setKitOwnerOrg(kitId, parsed.data.targetOrgId);
+  return json(request, allowedOrigins, 200, {
+    item: { kitId, ownerOrgId: updated?.ownerOrgId ?? parsed.data.targetOrgId, updatedAt: updated?.updatedAt ?? null },
+  });
+}
+
+async function setKitVisibilityHandler(
+  request: CoreRequest,
+  adminRepository: AdminRepository,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const kitId = request.pathParameters?.kitId;
+  if (!kitId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing kitId' });
+  }
+  const body = parseJsonBody(request) as Record<string, unknown> | undefined;
+  const actorUserId = typeof body?.actorUserId === 'string' ? body.actorUserId : undefined;
+  if (!actorUserId) {
+    return json(request, allowedOrigins, 400, { message: 'actorUserId is required' });
+  }
+  const parsed = setKitVisibilityRequestSchema.safeParse({ kitId, visibility: body?.visibility });
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid visibility payload' });
+  }
+
+  const kit = await adminRepository.getKit(kitId);
+  if (!kit) {
+    return json(request, allowedOrigins, 404, { message: 'Kit not found' });
+  }
+  const membership = await resolveKitMembership(orgRepository, kit, actorUserId);
+  if (!membership || !MANAGE_ROLES.has(membership.role)) {
+    return json(request, allowedOrigins, 403, { message: 'Only an owner or admin of the kit can change visibility' });
+  }
+
+  const updated = await orgRepository.setKitVisibility(kitId, parsed.data.visibility as KitVisibility);
+  return json(request, allowedOrigins, 200, {
+    item: { kitId, visibility: updated?.visibility ?? parsed.data.visibility, updatedAt: updated?.updatedAt ?? null },
   });
 }
 
@@ -1013,7 +1410,7 @@ function corsHeaders(request: CoreRequest, allowedOrigins: string[]): Record<str
 
   return {
     'Access-Control-Allow-Origin': allowOrigin,
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': `Content-Type,Authorization,${ADMIN_HEADER}`,
     'Vary': 'Origin',
   };

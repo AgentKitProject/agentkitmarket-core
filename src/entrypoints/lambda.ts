@@ -21,6 +21,7 @@ import type {
 import type {
   AdminRepository,
   CatalogRepository,
+  OrgRepository,
   PackageUploadService,
   SubmissionValidationUpdate,
   ValidationJobUpdate,
@@ -32,6 +33,7 @@ import {
   createAwsPackageUploadService,
   createDynamoAdminRepository,
   createDynamoCatalogRepository,
+  createDynamoOrgRepository,
 } from '../adapters/aws/index.js';
 
 // Re-exported for parity with the original handler module surface (consumed by
@@ -41,6 +43,7 @@ export { buildSubmissionRecord, toPublicKitDetail } from '../core/services/index
 interface HandlerOptions {
   repository: CatalogRepository;
   adminRepository?: AdminRepository;
+  orgRepository?: OrgRepository;
   packageUploadService?: PackageUploadService;
   allowedOrigins?: string[];
   adminKey?: string;
@@ -49,6 +52,7 @@ interface HandlerOptions {
 export const handler = createHandler({
   repository: createLazyDynamoCatalogRepository(),
   adminRepository: createLazyDynamoAdminRepository(),
+  orgRepository: createLazyDynamoOrgRepository(),
   packageUploadService: createLazyAwsPackageUploadService(),
 });
 
@@ -63,11 +67,13 @@ export function createHandler(options: HandlerOptions) {
     // defaulting to LAZY adapters so env is only touched when an admin/user
     // route actually invokes a method.
     const adminRepository = options.adminRepository ?? createLazyDynamoAdminRepository();
+    const orgRepository = options.orgRepository ?? createLazyDynamoOrgRepository();
     const packageUploadService = options.packageUploadService ?? createLazyAwsPackageUploadService();
 
     const response = await routeRequest(toCoreRequest(event), {
       repository: options.repository,
       adminRepository,
+      orgRepository,
       packageUploadService,
       allowedOrigins,
       adminKey,
@@ -99,6 +105,15 @@ function adminConfigFromEnv() {
     kitVersionsTableName: requiredEnv('KIT_VERSIONS_TABLE_NAME'),
     submissionsTableName: requiredEnv('SUBMISSIONS_TABLE_NAME'),
     validationJobsTableName: requiredEnv('VALIDATION_JOBS_TABLE_NAME'),
+  };
+}
+
+function orgConfigFromEnv() {
+  return {
+    organizationsTableName: requiredEnv('ORGANIZATIONS_TABLE_NAME'),
+    orgMembershipsTableName: requiredEnv('ORG_MEMBERSHIPS_TABLE_NAME'),
+    orgInvitesTableName: requiredEnv('ORG_INVITES_TABLE_NAME'),
+    kitsTableName: requiredEnv('KITS_TABLE_NAME'),
   };
 }
 
@@ -240,6 +255,32 @@ function createLazyDynamoAdminRepository(): AdminRepository {
     updateSubmissionValidationResult(submissionId: string, update: SubmissionValidationUpdate): Promise<void> {
       return getRepository().updateSubmissionValidationResult(submissionId, update);
     },
+  };
+}
+
+function createLazyDynamoOrgRepository(): OrgRepository {
+  let repository: OrgRepository | undefined;
+
+  const getRepository = (): OrgRepository => {
+    repository ??= createDynamoOrgRepository(orgConfigFromEnv());
+    return repository;
+  };
+
+  return {
+    createOrg(input) { return getRepository().createOrg(input); },
+    getOrg(orgId) { return getRepository().getOrg(orgId); },
+    getOrgBySlug(slug) { return getRepository().getOrgBySlug(slug); },
+    ensurePersonalOrg(userId, displayName) { return getRepository().ensurePersonalOrg(userId, displayName); },
+    listOrgsForUser(userId) { return getRepository().listOrgsForUser(userId); },
+    getMembership(orgId, userId) { return getRepository().getMembership(orgId, userId); },
+    listMembers(orgId) { return getRepository().listMembers(orgId); },
+    addMember(orgId, userId, role, invitedBy) { return getRepository().addMember(orgId, userId, role, invitedBy); },
+    acceptInvite(orgId, userId) { return getRepository().acceptInvite(orgId, userId); },
+    listInvitesForUser(userId) { return getRepository().listInvitesForUser(userId); },
+    removeMember(orgId, userId) { return getRepository().removeMember(orgId, userId); },
+    setKitOwnerOrg(kitId, orgId) { return getRepository().setKitOwnerOrg(kitId, orgId); },
+    setKitVisibility(kitId, visibility) { return getRepository().setKitVisibility(kitId, visibility); },
+    listKitsForOrg(orgId) { return getRepository().listKitsForOrg(orgId); },
   };
 }
 

@@ -13,6 +13,7 @@ import { newDb } from 'pg-mem';
 import {
   createPostgresCatalogRepository,
   createPostgresAdminRepository,
+  createPostgresOrgRepository,
   type PgPool,
 } from '../src/adapters/selfhost/postgres.js';
 import { runRepositoryContract, type ContractRepos } from './repository-contract.js';
@@ -32,6 +33,7 @@ const schemaSql = readFileSync(
 runRepositoryContract('postgres (pg-mem)', async (): Promise<ContractRepos> => {
   let catalog = undefined as unknown as ReturnType<typeof createPostgresCatalogRepository>;
   let admin = undefined as unknown as ReturnType<typeof createPostgresAdminRepository>;
+  let orgRepo = undefined as unknown as ReturnType<typeof createPostgresOrgRepository>;
 
   const reset = async (): Promise<void> => {
     const db = newDb();
@@ -40,6 +42,7 @@ runRepositoryContract('postgres (pg-mem)', async (): Promise<ContractRepos> => {
     await pool.query(schemaSql);
     catalog = createPostgresCatalogRepository(pool);
     admin = createPostgresAdminRepository(pool);
+    orgRepo = createPostgresOrgRepository(pool);
   };
 
   await reset();
@@ -47,6 +50,7 @@ runRepositoryContract('postgres (pg-mem)', async (): Promise<ContractRepos> => {
   return {
     get catalog() { return catalog; },
     get admin() { return admin; },
+    get org() { return orgRepo; },
     reset,
   };
 });

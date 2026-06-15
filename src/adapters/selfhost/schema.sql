@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS kits (
   downloads           bigint NOT NULL DEFAULT 0,
   featured            boolean,
   featured_rank       integer,
+  -- Org ownership + private-catalog visibility (Market Phase 2).
+  owner_org_id        text,
+  visibility          text,
   -- nested / flexible fields
   publisher           jsonb,
   categories          jsonb,
@@ -97,6 +100,7 @@ CREATE TABLE IF NOT EXISTS submissions (
   review_status        text NOT NULL,
   submission_type      text,
   target_kit_id        text,
+  owner_org_id         text,
   review_notes         text,
   validation_job_id    text,
   -- TTL: unix seconds; cleared (set NULL) once the upload is queued.
@@ -133,3 +137,52 @@ CREATE TABLE IF NOT EXISTS validation_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS validation_jobs_kit_id_idx ON validation_jobs (kit_id);
+
+-- Index for the private-catalog "list this org's kits" query.
+CREATE INDEX IF NOT EXISTS kits_owner_org_id_idx ON kits (owner_org_id);
+
+-- === Organizations (Market Phase 2) ===========================================
+
+CREATE TABLE IF NOT EXISTS organizations (
+  org_id                 text PRIMARY KEY,
+  slug                   text NOT NULL,
+  display_name           text NOT NULL,
+  type                   text NOT NULL,
+  owner_user_id          text NOT NULL,
+  handle                 text,
+  avatar_initials        text,
+  verified               boolean,
+  workos_organization_id text,
+  created_at             text NOT NULL,
+  updated_at             text NOT NULL
+);
+
+-- Dynamo Organizations had a unique slug-index GSI and an ownerUserId-index GSI.
+CREATE UNIQUE INDEX IF NOT EXISTS organizations_slug_uidx ON organizations (slug);
+CREATE INDEX IF NOT EXISTS organizations_owner_user_id_idx ON organizations (owner_user_id);
+
+CREATE TABLE IF NOT EXISTS org_memberships (
+  org_id             text NOT NULL,
+  user_id            text NOT NULL,
+  role               text NOT NULL,
+  status             text NOT NULL,
+  invited_by_user_id text,
+  created_at         text NOT NULL,
+  PRIMARY KEY (org_id, user_id)
+);
+
+-- Dynamo OrgMemberships had a userId-index GSI.
+CREATE INDEX IF NOT EXISTS org_memberships_user_id_idx ON org_memberships (user_id);
+
+CREATE TABLE IF NOT EXISTS org_invites (
+  org_id             text NOT NULL,
+  user_id            text NOT NULL,
+  email              text,
+  role               text NOT NULL,
+  invited_by_user_id text NOT NULL,
+  created_at         text NOT NULL,
+  PRIMARY KEY (org_id, user_id)
+);
+
+-- Dynamo OrgInvites had a userId-index GSI.
+CREATE INDEX IF NOT EXISTS org_invites_user_id_idx ON org_invites (user_id);

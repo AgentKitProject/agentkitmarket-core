@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import type { AdminRepository, CatalogRepository } from '../src/core/ports.js';
+import type { AdminRepository, CatalogRepository, OrgRepository } from '../src/core/ports.js';
 import type {
   CreateSubmissionInput,
   SubmissionRecord,
@@ -30,6 +30,8 @@ import { isHiddenFromDefaultReviewQueue } from '../src/core/services/index.js';
 export interface ContractRepos {
   catalog: CatalogRepository;
   admin: AdminRepository;
+  /** Org repository. Optional so a backend can opt out, though both adapters provide it. */
+  org?: OrgRepository;
   /** Truncate/recreate all backing tables so each test starts clean. */
   reset: () => Promise<void>;
 }
@@ -440,6 +442,152 @@ export function runRepositoryContract(name: string, makeRepos: MakeRepos): void 
         const reviewedMs = Date.parse(reviewedAt);
         expect(isHiddenFromDefaultReviewQueue(sub!, reviewedMs + 1000)).toBe(false);
         expect(isHiddenFromDefaultReviewQueue(sub!, reviewedMs + REVIEW_QUEUE_RETENTION_MS + 1000)).toBe(true);
+      });
+    });
+
+    describe('organizations (Market Phase 2)', () => {
+      function org(): OrgRepository {
+        if (!repos.org) {
+          throw new Error('OrgRepository not provided by this backend');
+        }
+        return repos.org;
+      }
+
+      async function publishKit(input: CreateSubmissionInput): Promise<string> {
+        const queued = await uploadAndQueue(repos.admin, input);
+        const kit = await repos.admin.publishSubmission(
+          { ...queued, validationStatus: 'passed' },
+          new Date().toISOString(),
+        );
+        return kit.kitId;
+      }
+
+      it('createOrg creates a team org with an active owner membership', async () => {
+        const created = await org().createOrg({ displayName: 'Acme Team', ownerUserId: 'user_owner' });
+        expect(created.orgId).toMatch(/^org_/);
+        expect(created.type).toBe('team');
+        expect(created.slug).toBe('acme-team');
+        expect(created.ownerUserId).toBe('user_owner');
+
+        const membership = await org().getMembership(created.orgId, 'user_owner');
+        expect(membership?.role).toBe('owner');
+        expect(membership?.status).toBe('active');
+      });
+
+      it('createOrg dedupes slugs with a numeric suffix', async () => {
+        const a = await org().createOrg({ displayName: 'Dup Org', ownerUserId: 'u1' });
+        const b = await org().createOrg({ displayName: 'Dup Org', ownerUserId: 'u2' });
+        const c = await org().createOrg({ displayName: 'Dup Org', ownerUserId: 'u3' });
+        expect(a.slug).toBe('dup-org');
+        expect(b.slug).toBe('dup-org-2');
+        expect(c.slug).toBe('dup-org-3');
+      });
+
+      it('ensurePersonalOrg is idempotent', async () => {
+        const first = await org().ensurePersonalOrg('user_p', 'Pat Personal');
+        const second = await org().ensurePersonalOrg('user_p', 'Pat Personal');
+        expect(first.orgId).toBe(second.orgId);
+        expect(first.type).toBe('personal');
+      });
+
+      it('getOrg / getOrgBySlug round-trip', async () => {
+        const created = await org().createOrg({ displayName: 'Lookup Org', ownerUserId: 'u_l' });
+        expect((await org().getOrg(created.orgId))?.orgId).toBe(created.orgId);
+        expect((await org().getOrgBySlug(created.slug))?.orgId).toBe(created.orgId);
+        expect(await org().getOrg('org_nope')).toBeUndefined();
+      });
+
+      it('addMember creates an invite + invited membership; acceptInvite activates it', async () => {
+        const created = await org().createOrg({ displayName: 'Invite Org', ownerUserId: 'u_owner' });
+
+        const membership = await org().addMember(created.orgId, 'u_invitee', 'member', 'u_owner');
+        expect(membership.status).toBe('invited');
+        expect(membership.role).toBe('member');
+
+        const invites = await org().listInvitesForUser('u_invitee');
+        expect(invites).toHaveLength(1);
+        expect(invites[0]?.orgId).toBe(created.orgId);
+
+        // Invited (not yet active) members are still listed for the user.
+        expect((await org().listOrgsForUser('u_invitee')).map((o) => o.orgId)).toContain(created.orgId);
+
+        const accepted = await org().acceptInvite(created.orgId, 'u_invitee');
+        expect(accepted?.status).toBe('active');
+
+        // Invite is cleared after accept.
+        expect(await org().listInvitesForUser('u_invitee')).toHaveLength(0);
+
+        // Accepting a non-existent invite returns undefined.
+        expect(await org().acceptInvite(created.orgId, 'u_invitee')).toBeUndefined();
+      });
+
+      it('listMembers returns all memberships; removeMember marks removed', async () => {
+        const created = await org().createOrg({ displayName: 'Members Org', ownerUserId: 'u_owner' });
+        await org().addMember(created.orgId, 'u_member', 'member', 'u_owner');
+        await org().acceptInvite(created.orgId, 'u_member');
+
+        expect((await org().listMembers(created.orgId)).map((m) => m.userId).sort())
+          .toEqual(['u_member', 'u_owner']);
+
+        await org().removeMember(created.orgId, 'u_member');
+        const removed = await org().getMembership(created.orgId, 'u_member');
+        expect(removed?.status).toBe('removed');
+        // Removed members drop out of the user's org list.
+        expect((await org().listOrgsForUser('u_member')).map((o) => o.orgId)).not.toContain(created.orgId);
+      });
+
+      it('listOrgsForUser lists orgs the user belongs to', async () => {
+        const a = await org().createOrg({ displayName: 'Org A', ownerUserId: 'multi_user' });
+        const b = await org().createOrg({ displayName: 'Org B', ownerUserId: 'multi_user' });
+        const ids = (await org().listOrgsForUser('multi_user')).map((o) => o.orgId).sort();
+        expect(ids).toEqual([a.orgId, b.orgId].sort());
+      });
+
+      it('setKitOwnerOrg transfers a kit to another org', async () => {
+        const kitId = await publishKit(baseInput());
+        const target = await org().createOrg({ displayName: 'Target Org', ownerUserId: 'user_1' });
+
+        const updated = await org().setKitOwnerOrg(kitId, target.orgId);
+        expect(updated?.ownerOrgId).toBe(target.orgId);
+
+        const kits = await org().listKitsForOrg(target.orgId);
+        expect(kits.map((k) => k.kitId)).toContain(kitId);
+
+        expect(await org().setKitOwnerOrg('kit_nope', target.orgId)).toBeUndefined();
+      });
+
+      it('setKitVisibility=private hides a kit from the public catalog', async () => {
+        const kitId = await publishKit(baseInput());
+        // Visible by default.
+        expect((await repos.catalog.listKits(20, undefined)).kits).toHaveLength(1);
+
+        const updated = await org().setKitVisibility(kitId, 'private');
+        expect(updated?.visibility).toBe('private');
+
+        // Excluded from the public listing + detail.
+        expect((await repos.catalog.listKits(20, undefined)).kits).toHaveLength(0);
+        expect((await repos.catalog.getKitBySlug('my-cool-kit')).kit).toBeUndefined();
+
+        // Back to public restores it.
+        await org().setKitVisibility(kitId, 'public');
+        expect((await repos.catalog.listKits(20, undefined)).kits).toHaveLength(1);
+      });
+
+      it('listKitsForOrg includes private kits the public catalog hides', async () => {
+        const kitId = await publishKit(baseInput());
+        const target = await org().createOrg({ displayName: 'Owner Org', ownerUserId: 'user_1' });
+        await org().setKitOwnerOrg(kitId, target.orgId);
+        await org().setKitVisibility(kitId, 'private');
+
+        const kits = await org().listKitsForOrg(target.orgId);
+        expect(kits.map((k) => k.kitId)).toContain(kitId);
+        expect(kits.find((k) => k.kitId === kitId)?.visibility).toBe('private');
+      });
+
+      it('a published kit defaults to public visibility', async () => {
+        const kitId = await publishKit(baseInput());
+        const kit = await repos.admin.getKit(kitId);
+        expect(kit?.visibility).toBe('public');
       });
     });
   });

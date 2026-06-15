@@ -11,6 +11,7 @@ export type {
   ConfigProvider,
   CatalogRepository,
   AdminRepository,
+  OrgRepository,
   PackageUploadService,
   ObjectStore,
   MessageQueue,
@@ -29,6 +30,7 @@ export type { ValidationSummary, RunValidationDeps } from "./core/services/valid
 // runtime-agnostic router. Entrypoints remain exposed only via the package
 // subpath exports (./entrypoints/lambda | server | worker).
 export * from "./core/services/index.js";
+export * from "./core/services/orgs.js";
 export * from "./core/services/constants.js";
 export { routeRequest } from "./core/routes/index.js";
 export type { CoreRequest, CoreResponse, RouterDeps } from "./core/routes/types.js";

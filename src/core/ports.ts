@@ -23,6 +23,11 @@ import type {
   CreateSubmissionResult,
   KitRecord,
   KitVersionRecord,
+  KitVisibility,
+  Organization,
+  OrgInvite,
+  OrgMembership,
+  OrgRole,
   SubmissionRecord,
   ValidationJobRecord,
 } from "./types.js";
@@ -69,6 +74,42 @@ export interface AdminRepository {
    */
   updateValidationJob(jobId: string, update: ValidationJobUpdate): Promise<void>;
   updateSubmissionValidationResult(submissionId: string, update: SubmissionValidationUpdate): Promise<void>;
+}
+
+/**
+ * Organizations, memberships, invites + kit-ownership mutations.
+ *
+ * Backs Market Phase 2 org slices (orgs, team roles, private catalogs). Both the
+ * AWS (DynamoDB) and self-host (Postgres) adapters implement this identically;
+ * the dual-backend contract suite enforces parity.
+ */
+export interface OrgRepository {
+  /** Creates an org with a unique slug (numeric-suffix dedupe) and an active owner membership. */
+  createOrg(input: {
+    displayName: string;
+    ownerUserId: string;
+    type?: 'personal' | 'team';
+    slug?: string;
+    handle?: string;
+  }): Promise<Organization>;
+  getOrg(orgId: string): Promise<Organization | undefined>;
+  getOrgBySlug(slug: string): Promise<Organization | undefined>;
+  /** Idempotently returns the user's personal org, creating it if absent. */
+  ensurePersonalOrg(userId: string, displayName: string): Promise<Organization>;
+  /** Orgs the user is an active or invited member of. */
+  listOrgsForUser(userId: string): Promise<Organization[]>;
+  getMembership(orgId: string, userId: string): Promise<OrgMembership | undefined>;
+  listMembers(orgId: string): Promise<OrgMembership[]>;
+  /** Adds an `invited` membership + a pending invite for the user. */
+  addMember(orgId: string, userId: string, role: OrgRole, invitedBy: string): Promise<OrgMembership>;
+  /** Flips an `invited` membership to `active` and clears the invite. */
+  acceptInvite(orgId: string, userId: string): Promise<OrgMembership | undefined>;
+  listInvitesForUser(userId: string): Promise<OrgInvite[]>;
+  removeMember(orgId: string, userId: string): Promise<void>;
+  setKitOwnerOrg(kitId: string, orgId: string): Promise<KitRecord | undefined>;
+  setKitVisibility(kitId: string, visibility: KitVisibility): Promise<KitRecord | undefined>;
+  /** All kits owned by an org, including private ones (for the org's own listing). */
+  listKitsForOrg(orgId: string): Promise<KitRecord[]>;
 }
 
 /** Fields the validation worker writes to a ValidationJob row. */
