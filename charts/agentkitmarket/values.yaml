@@ -1,0 +1,125 @@
+# ---------------------------------------------------------------------------
+# Image
+# ---------------------------------------------------------------------------
+image:
+  repository: ghcr.io/agentkitproject/agentkitmarket-core
+  tag: "0.1.0"       # override with your release tag, e.g. "v0.3.1"
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------
+# API server
+# ---------------------------------------------------------------------------
+api:
+  replicas: 2
+  port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: false
+    className: ""
+    host: "market.example.com"
+    # annotations:
+    #   kubernetes.io/ingress.class: nginx
+    #   cert-manager.io/cluster-issuer: letsencrypt-prod
+    tls: []
+    #  - secretName: market-tls
+    #    hosts:
+    #      - market.example.com
+
+# ---------------------------------------------------------------------------
+# Background worker
+# ---------------------------------------------------------------------------
+worker:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Application config (non-secret, goes into ConfigMap)
+# ---------------------------------------------------------------------------
+config:
+  # Comma-separated CORS origins; leave empty to allow none.
+  allowedOrigins: ""
+  # S3/MinIO region; default is us-east-1 (fine for MinIO)
+  s3Region: "us-east-1"
+  # Force path-style S3 URLs — required for MinIO.
+  s3ForcePathStyle: "true"
+  # HTTP listen port — must match api.port above.
+  port: "8080"
+
+# ---------------------------------------------------------------------------
+# Secrets (base64-encoded in the generated Secret).
+# All values below are REQUIRED; set them on the command line:
+#   --set secrets.adminApiKey=... --set secrets.databaseUrl=...
+# or in a separate --values secrets.yaml that is NOT committed to git.
+# ---------------------------------------------------------------------------
+secrets:
+  # Admin API key (ADMIN_API_KEY): gates /admin/* and /users/* routes.
+  adminApiKey: ""
+  # Postgres connection string (DATABASE_URL), e.g.:
+  #   postgresql://user:password@postgres:5432/agentkitmarket
+  databaseUrl: ""
+  # S3/MinIO endpoint (S3_ENDPOINT), e.g. http://minio:9000
+  s3Endpoint: ""
+  # S3/MinIO bucket name (PACKAGE_BUCKET_NAME)
+  packageBucketName: ""
+  # S3/MinIO access key (S3_ACCESS_KEY_ID)
+  s3AccessKeyId: ""
+  # S3/MinIO secret key (S3_SECRET_ACCESS_KEY)
+  s3SecretAccessKey: ""
+  # Redis URL (REDIS_URL), e.g. redis://redis:6379
+  redisUrl: ""
+
+# ---------------------------------------------------------------------------
+# Optional in-cluster Postgres (for dev/testing)
+# Disable and set secrets.databaseUrl to point at an external instance for prod.
+# ---------------------------------------------------------------------------
+postgres:
+  enabled: true
+  image: postgres:16
+  database: agentkitmarket
+  user: agentkitmarket
+  # Change this before deploying to any non-throwaway environment.
+  password: "changeme"
+  storage:
+    size: 5Gi
+    # storageClassName: ""  # uncomment and set for your cluster
+
+# ---------------------------------------------------------------------------
+# Optional in-cluster MinIO (for dev/testing)
+# Disable and configure secrets.s3* for an external S3-compatible store in prod.
+# ---------------------------------------------------------------------------
+minio:
+  enabled: true
+  image: minio/minio:latest
+  bucket: agentkit-packages
+  rootUser: minioadmin
+  # Change this before deploying to any non-throwaway environment.
+  rootPassword: "changeme"
+  storage:
+    size: 10Gi
+    # storageClassName: ""
+
+# ---------------------------------------------------------------------------
+# Optional in-cluster Redis (for dev/testing)
+# Disable and set secrets.redisUrl to point at an external instance for prod.
+# ---------------------------------------------------------------------------
+redis:
+  enabled: true
+  image: redis:7
+  storage:
+    size: 1Gi
+    # storageClassName: ""

@@ -32,7 +32,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run copy-sql",
+    "copy-sql": "cp src/adapters/selfhost/schema.sql dist/adapters/selfhost/schema.sql",
     "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"

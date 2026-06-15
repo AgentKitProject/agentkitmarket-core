@@ -1,0 +1,12 @@
+apiVersion: v2
+name: agentkitmarket
+description: Self-hosted AgentKit Market backend (API server + worker)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - agentkit
+  - market
+home: https://agentkitproject.com
+sources:
+  - https://github.com/AgentKitProject/agentkitmarket-core
