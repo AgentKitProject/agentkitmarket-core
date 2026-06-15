@@ -18,3 +18,26 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+
+  dynamo-contract:
+    runs-on: ubuntu-latest
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local
+        ports:
+          - 8000:8000
+    env:
+      DYNAMODB_ENDPOINT: http://127.0.0.1:8000
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: dummy
+      AWS_SECRET_ACCESS_KEY: dummy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      # Runs the repository contract suite against the AWS DynamoDB adapter
+      # pointed at dynamodb-local (anti-drift parity vs the Postgres run).
+      # DYNAMODB_ENDPOINT being set un-skips test/dynamo-repo.test.ts.
+      - run: npm test

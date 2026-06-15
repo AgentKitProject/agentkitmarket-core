@@ -118,6 +118,14 @@ export interface ValidationJobMessage {
 
 /** Object storage for kit packages (`.agentkit.zip`). S3 in hosted, MinIO in self-host. */
 export interface ObjectStore {
+  /**
+   * Idempotently ensure the backing bucket exists. Self-host (MinIO) starts
+   * empty, so the composition root calls this once on startup; "already
+   * exists" / "already owned by you" must be treated as success. Hosted S3
+   * buckets are CDK-managed, so the AWS implementation is a safe verify/no-op
+   * and the hosted Lambda entrypoint never calls it.
+   */
+  ensureBucket(): Promise<void>;
   createUploadUrl(key: string): Promise<string>;
   createDownloadUrl(key: string): Promise<string>;
   exists(key: string): Promise<boolean>;

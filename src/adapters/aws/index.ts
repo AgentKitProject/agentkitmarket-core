@@ -12,7 +12,7 @@
  */
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import {
   BatchGetCommand,
@@ -71,11 +71,43 @@ import {
   isActiveSubmissionForDuplicateCheck,
 } from '../../core/services/index.js';
 
+/**
+ * Optional DynamoDB client overrides. Defaults (all unset) preserve the hosted
+ * behavior: the SDK resolves the real AWS endpoint/region/credentials from the
+ * Lambda execution role. Tests point these at `dynamodb-local`
+ * (e.g. `endpoint: 'http://127.0.0.1:8000'`) with dummy credentials.
+ */
+export interface DynamoClientOverrides {
+  endpoint?: string;
+  region?: string;
+  credentials?: { accessKeyId: string; secretAccessKey: string };
+}
+
+function buildDynamoDocumentClient(overrides?: DynamoClientOverrides): DynamoDBDocumentClient {
+  const clientConfig: ConstructorParameters<typeof DynamoDBClient>[0] = {};
+  if (overrides?.endpoint) {
+    clientConfig.endpoint = overrides.endpoint;
+  }
+  if (overrides?.region) {
+    clientConfig.region = overrides.region;
+  }
+  if (overrides?.credentials) {
+    clientConfig.credentials = overrides.credentials;
+  }
+  return DynamoDBDocumentClient.from(new DynamoDBClient(clientConfig), {
+    marshallOptions: {
+      removeUndefinedValues: true,
+    },
+  });
+}
+
 /** Config for the DynamoDB catalog (read-side) repository. */
 export interface DynamoCatalogConfig {
   kitsTableName: string;
   kitVersionsTableName: string;
   publishersTableName: string;
+  /** Optional client overrides (dynamodb-local). Omit for hosted. */
+  client?: DynamoClientOverrides;
 }
 
 /** Config for the DynamoDB admin (write-side) repository. */
@@ -84,6 +116,8 @@ export interface DynamoAdminConfig {
   kitVersionsTableName: string;
   submissionsTableName: string;
   validationJobsTableName: string;
+  /** Optional client overrides (dynamodb-local). Omit for hosted. */
+  client?: DynamoClientOverrides;
 }
 
 /** Config for the S3 + SQS package upload service. */
@@ -94,11 +128,7 @@ export interface AwsPackageUploadConfig {
 
 export function createDynamoCatalogRepository(config: DynamoCatalogConfig): CatalogRepository {
   const { kitsTableName, kitVersionsTableName, publishersTableName } = config;
-  const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-    marshallOptions: {
-      removeUndefinedValues: true,
-    },
-  });
+  const dynamo = buildDynamoDocumentClient(config.client);
 
   return {
     async listKits(limit: number, nextToken: string | undefined): Promise<CatalogPage> {
@@ -172,11 +202,7 @@ export function createDynamoCatalogRepository(config: DynamoCatalogConfig): Cata
 
 export function createDynamoAdminRepository(config: DynamoAdminConfig): AdminRepository {
   const { kitsTableName, kitVersionsTableName, submissionsTableName, validationJobsTableName } = config;
-  const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-    marshallOptions: {
-      removeUndefinedValues: true,
-    },
-  });
+  const dynamo = buildDynamoDocumentClient(config.client);
 
   return {
     async createSubmission(input: CreateSubmissionInput): Promise<CreateSubmissionResult> {
@@ -718,6 +744,21 @@ export function createS3ObjectStore(config: S3ObjectStoreConfig): ObjectStore {
   const s3 = new S3Client({});
 
   return {
+    async ensureBucket(): Promise<void> {
+      // The hosted package bucket is provisioned + owned by CDK; this is a safe
+      // verify-only no-op so the port contract holds. The hosted Lambda
+      // entrypoint does NOT call this (bucket lifecycle is CDK's), and a HEAD
+      // failure here is not allowed to fail-fast the way self-host startup does.
+      try {
+        await s3.send(new HeadBucketCommand({ Bucket: packageBucketName }));
+      } catch (error) {
+        console.warn('ensureBucket: HEAD on hosted bucket failed; treating as no-op', {
+          packageBucketName,
+          error,
+        });
+      }
+    },
+
     createUploadUrl(key: string): Promise<string> {
       return getSignedUrl(s3, new PutObjectCommand({
         Bucket: packageBucketName,

@@ -58,9 +58,6 @@ export interface StartServerResult {
 export async function startServer(): Promise<StartServerResult> {
   const config = loadSelfHostConfig(new EnvConfigProvider());
 
-  const pool = new Pool({ connectionString: config.postgresUrl });
-  await pool.query(readSchemaSql());
-
   const objectStore = createMinioObjectStore({
     endpoint: config.objectStore.endpoint,
     bucket: config.objectStore.bucket,
@@ -69,6 +66,20 @@ export async function startServer(): Promise<StartServerResult> {
     secretAccessKey: config.objectStore.secretAccessKey,
     forcePathStyle: config.objectStore.forcePathStyle,
   });
+
+  // A fresh MinIO starts with no buckets, so create the package bucket before
+  // serving any submit/validate traffic. Failure here is fatal: without the
+  // bucket the upload→validate flow cannot work.
+  console.log(`Ensuring object-store bucket "${config.objectStore.bucket}" exists`);
+  try {
+    await objectStore.ensureBucket();
+    console.log(`Object-store bucket "${config.objectStore.bucket}" is ready`);
+  } catch (error) {
+    throw new Error(`Startup failed: could not ensure object-store bucket: ${String(error)}`);
+  }
+
+  const pool = new Pool({ connectionString: config.postgresUrl });
+  await pool.query(readSchemaSql());
 
   const redis = new Redis(config.redisUrl);
   const queue = createRedisQueue({ client: redis });

@@ -11,7 +11,9 @@
  */
 
 import {
+  CreateBucketCommand,
   GetObjectCommand,
+  HeadBucketCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -47,6 +49,29 @@ export function createMinioObjectStore(config: MinioObjectStoreConfig): ObjectSt
   });
 
   return {
+    async ensureBucket(): Promise<void> {
+      // Fast path: bucket already present.
+      try {
+        await s3.send(new HeadBucketCommand({ Bucket: bucket }));
+        return;
+      } catch {
+        // Fall through to create. A 404/NotFound is expected on a fresh MinIO.
+      }
+
+      try {
+        await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+      } catch (error) {
+        // Tolerate the race / re-run where the bucket already exists or is
+        // already owned by this account.
+        const name = (error as { name?: string; Code?: string })?.name
+          ?? (error as { Code?: string })?.Code;
+        if (name === 'BucketAlreadyOwnedByYou' || name === 'BucketAlreadyExists') {
+          return;
+        }
+        throw new Error(`Failed to ensure object-store bucket "${bucket}": ${String(error)}`);
+      }
+    },
+
     createUploadUrl(key: string): Promise<string> {
       return getSignedUrl(s3, new PutObjectCommand({
         Bucket: bucket,
