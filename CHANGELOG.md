@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.4.0...v0.5.0) (2026-06-15)
+
+
+### Features
+
+* route hosted Lambda by request path for {proxy+} integration ([a5a152a](https://github.com/AgentKitProject/agentkitmarket-core/commit/a5a152a9922afa9b21bf5f75ef388c5c963fa609))
+
+
+### Bug Fixes
+
+* **schema:** ALTER ADD COLUMN owner_org_id/visibility for upgrade-safety ([79d7a62](https://github.com/AgentKitProject/agentkitmarket-core/commit/79d7a62c65250d963d29b7c0c7adb9903f15f73a))
+
 ## [0.4.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.3.0...v0.4.0) (2026-06-15)
 
 
