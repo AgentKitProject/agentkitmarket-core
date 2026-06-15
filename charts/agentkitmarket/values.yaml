@@ -147,6 +147,27 @@ config:
 # or in a separate --values secrets.yaml that is NOT committed to git.
 # ---------------------------------------------------------------------------
 secrets:
+  # Source ALL backend secrets from a single externally-managed Secret (e.g. one
+  # synced by Infisical). When set:
+  #   - The chart-managed app Secret is NOT rendered.
+  #   - api + worker containers use envFrom: secretRef pointing at this Secret.
+  #   - adminApiKeyExistingSecret env block is skipped (ADMIN_API_KEY is already
+  #     present in the external Secret).
+  #   - Bundled postgres POSTGRES_PASSWORD and bundled minio MINIO_ROOT_PASSWORD
+  #     are sourced via secretKeyRef from this Secret (their own chart Secrets are
+  #     NOT rendered).
+  #   - The inline values below (adminApiKey, databaseUrl, etc.) are all ignored.
+  #
+  # Required keys in the external Secret:
+  #   ADMIN_API_KEY, DATABASE_URL, S3_ENDPOINT, PACKAGE_BUCKET_NAME,
+  #   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, REDIS_URL,
+  #   POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD
+  #
+  # IMPORTANT: S3_ACCESS_KEY_ID must equal values.minio.rootUser (default:
+  # "minioadmin") and S3_SECRET_ACCESS_KEY must equal the MINIO_ROOT_PASSWORD in
+  # this Secret — the app authenticates to bundled MinIO with the S3 credentials.
+  existingSecret: ""
+
   # Admin API key (ADMIN_API_KEY): gates /admin/* and /users/* routes.
   adminApiKey: ""
   # Alternatively, source ADMIN_API_KEY from an existing Secret (e.g. one synced

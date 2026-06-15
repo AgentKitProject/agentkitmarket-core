@@ -36,8 +36,8 @@ spec:
             - configMapRef:
                 name: {{ include "agentkitmarket.configmapName" . }}
             - secretRef:
-                name: {{ include "agentkitmarket.secretName" . }}
-          {{- if .Values.secrets.adminApiKeyExistingSecret }}
+                name: {{ if .Values.secrets.existingSecret }}{{ .Values.secrets.existingSecret }}{{ else }}{{ include "agentkitmarket.secretName" . }}{{ end }}
+          {{- if and (not .Values.secrets.existingSecret) .Values.secrets.adminApiKeyExistingSecret }}
           env:
             - name: ADMIN_API_KEY
               valueFrom:

@@ -16,6 +16,7 @@ spec:
   {{- if .Values.postgres.storage.storageClassName }}
   storageClassName: {{ .Values.postgres.storage.storageClassName }}
   {{- end }}
+{{- if not .Values.secrets.existingSecret }}
 ---
 apiVersion: v1
 kind: Secret
@@ -27,6 +28,7 @@ metadata:
 type: Opaque
 data:
   POSTGRES_PASSWORD: {{ .Values.postgres.password | b64enc | quote }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -60,7 +62,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentkitmarket.fullname" . }}-postgres-secret
+                  name: {{ if .Values.secrets.existingSecret }}{{ .Values.secrets.existingSecret }}{{ else }}{{ include "agentkitmarket.fullname" . }}-postgres-secret{{ end }}
                   key: POSTGRES_PASSWORD
           ports:
             - name: postgres

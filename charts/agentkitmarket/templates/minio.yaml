@@ -16,6 +16,7 @@ spec:
   {{- if .Values.minio.storage.storageClassName }}
   storageClassName: {{ .Values.minio.storage.storageClassName }}
   {{- end }}
+{{- if not .Values.secrets.existingSecret }}
 ---
 apiVersion: v1
 kind: Secret
@@ -28,6 +29,7 @@ type: Opaque
 data:
   MINIO_ROOT_USER: {{ .Values.minio.rootUser | b64enc | quote }}
   MINIO_ROOT_PASSWORD: {{ .Values.minio.rootPassword | b64enc | quote }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -56,14 +58,18 @@ spec:
           args: ["server", "/data", "--console-address", ":9001"]
           env:
             - name: MINIO_ROOT_USER
+              {{- if .Values.secrets.existingSecret }}
+              value: {{ .Values.minio.rootUser | quote }}
+              {{- else }}
               valueFrom:
                 secretKeyRef:
                   name: {{ include "agentkitmarket.fullname" . }}-minio-secret
                   key: MINIO_ROOT_USER
+              {{- end }}
             - name: MINIO_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentkitmarket.fullname" . }}-minio-secret
+                  name: {{ if .Values.secrets.existingSecret }}{{ .Values.secrets.existingSecret }}{{ else }}{{ include "agentkitmarket.fullname" . }}-minio-secret{{ end }}
                   key: MINIO_ROOT_PASSWORD
           ports:
             - name: api
