@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.1.0...v0.2.0) (2026-06-15)
+
+
+### Features
+
+* container runtime + shared validation worker ([fde72cf](https://github.com/AgentKitProject/agentkitmarket-core/commit/fde72cf58101f00a2e71b6b1edc1c91c8d4fbd49))
+* self-host adapters (Postgres, MinIO, Redis) + repository contract suite ([5981a48](https://github.com/AgentKitProject/agentkitmarket-core/commit/5981a48d146b82d5564fcb553a3992f1090ec9dc))
+
 ## 0.1.0 (2026-06-15)
 
 
