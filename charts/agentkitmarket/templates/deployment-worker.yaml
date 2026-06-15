@@ -33,5 +33,13 @@ spec:
                 name: {{ include "agentkitmarket.configmapName" . }}
             - secretRef:
                 name: {{ include "agentkitmarket.secretName" . }}
+          {{- if .Values.secrets.adminApiKeyExistingSecret }}
+          env:
+            - name: ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.adminApiKeyExistingSecret }}
+                  key: {{ .Values.secrets.adminApiKeyExistingSecretKey }}
+          {{- end }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
