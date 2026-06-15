@@ -99,6 +99,16 @@ export function toPublicKit(kit: KitRecord, publisher: PublisherRecord | undefin
     featuredRank: typeof kit.featuredRank === 'number' ? kit.featuredRank : null,
     publishedAt: kit.publishedAt ?? null,
     updatedAt: kit.updatedAt ?? null,
+    // Tier-2: surface price metadata so the catalog can display it. Defaults keep
+    // free kits behaving exactly as before. License text/body is NOT surfaced here.
+    pricing: kit.pricing === 'paid' ? 'paid' : 'free',
+    priceModel: kit.pricing === 'paid' ? (kit.priceModel ?? null) : null,
+    priceCents: kit.pricing === 'paid' && typeof kit.priceCents === 'number' ? kit.priceCents : null,
+    currency: kit.currency ?? 'USD',
+    interval: kit.pricing === 'paid' && kit.priceModel === 'subscription' ? (kit.interval ?? null) : null,
+    downloadable: kit.pricing === 'paid' ? kit.downloadable === true : true,
+    licenseType: kit.licenseType === 'custom' ? 'custom' : 'default',
+    licenseVersion: kit.licenseType === 'custom' ? 'custom' : (kit.licenseVersion ?? null),
   };
 }
 

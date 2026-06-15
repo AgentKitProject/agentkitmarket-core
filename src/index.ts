@@ -13,11 +13,13 @@ export type {
   AdminRepository,
   OrgRepository,
   PackageUploadService,
+  EntitlementRepository,
   ObjectStore,
   MessageQueue,
   ValidationJobMessage,
   ValidationJobUpdate,
   SubmissionValidationUpdate,
+  KitPricingUpdate,
 } from "./core/ports.js";
 
 // Config + validation service (cloud-free) — usable by both runtimes.
@@ -31,6 +33,8 @@ export type { ValidationSummary, RunValidationDeps } from "./core/services/valid
 // subpath exports (./entrypoints/lambda | server | worker).
 export * from "./core/services/index.js";
 export * from "./core/services/orgs.js";
+export * from "./core/services/pricing.js";
+export * from "./core/services/zip-inject.js";
 export * from "./core/services/constants.js";
 export { routeRequest } from "./core/routes/index.js";
 export type { CoreRequest, CoreResponse, RouterDeps } from "./core/routes/types.js";

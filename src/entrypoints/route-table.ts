@@ -46,6 +46,12 @@ const ROUTES: RoutePattern[] = [
   { method: 'POST', template: '/admin/orgs/{orgId}/invites/{userId}/accept' },
   { method: 'POST', template: '/admin/kits/{kitId}/transfer' },
   { method: 'POST', template: '/admin/kits/{kitId}/visibility' },
+  // Tier-2 paid/licensed kits (Seam B).
+  { method: 'POST', template: '/admin/kits/{kitId}/pricing' },
+  { method: 'GET', template: '/admin/users/{userId}/entitlements' },
+  { method: 'GET', template: '/admin/kits/{kitId}/entitlements/{userId}' },
+  { method: 'POST', template: '/admin/kits/{kitId}/entitlements' },
+  { method: 'POST', template: '/admin/kits/{kitId}/licensed-package' },
 ];
 
 export interface MatchedRoute {

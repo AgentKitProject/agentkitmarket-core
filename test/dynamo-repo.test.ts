@@ -35,6 +35,7 @@ import {
   createDynamoCatalogRepository,
   createDynamoAdminRepository,
   createDynamoOrgRepository,
+  createDynamoEntitlementRepository,
   type DynamoClientOverrides,
 } from '../src/adapters/aws/index.js';
 import { runRepositoryContract, type ContractRepos } from './repository-contract.js';
@@ -50,6 +51,7 @@ const TABLES = {
   organizations: 'Organizations',
   orgMemberships: 'OrgMemberships',
   orgInvites: 'OrgInvites',
+  entitlements: 'Entitlements',
 } as const;
 
 const S = 'S' as const;
@@ -205,6 +207,26 @@ const TABLE_DEFINITIONS: CreateTableCommandInput[] = [
       },
     ],
   },
+  {
+    // Tier-2: PK userId / SK kitId; GSI kitId-index for seller/admin analytics.
+    TableName: TABLES.entitlements,
+    BillingMode: 'PAY_PER_REQUEST',
+    KeySchema: [
+      { AttributeName: 'userId', KeyType: 'HASH' },
+      { AttributeName: 'kitId', KeyType: 'RANGE' },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'userId', AttributeType: S },
+      { AttributeName: 'kitId', AttributeType: S },
+    ],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'kitId-index',
+        KeySchema: [{ AttributeName: 'kitId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
 ];
 
 if (!endpoint) {
@@ -267,6 +289,10 @@ if (!endpoint) {
       kitsTableName: TABLES.kits,
       client: overrides,
     });
+    const entitlement = createDynamoEntitlementRepository({
+      entitlementsTableName: TABLES.entitlements,
+      client: overrides,
+    });
 
     // Recreate tables per reset for a clean slate each test.
     const reset = async (): Promise<void> => {
@@ -274,6 +300,6 @@ if (!endpoint) {
       await createAllTables();
     };
 
-    return { catalog, admin, org, reset };
+    return { catalog, admin, org, entitlement, reset };
   });
 }

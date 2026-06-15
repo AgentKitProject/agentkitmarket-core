@@ -16,11 +16,13 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import type { AdminRepository, CatalogRepository, OrgRepository } from '../src/core/ports.js';
+import type { AdminRepository, CatalogRepository, EntitlementRepository, ObjectStore, OrgRepository } from '../src/core/ports.js';
 import type {
   CreateSubmissionInput,
   SubmissionRecord,
 } from '../src/core/types.js';
+import { DEFAULT_KIT_LICENSE, DEFAULT_KIT_LICENSE_VERSION } from '../src/core/services/pricing.js';
+import { injectFileIntoZip } from '../src/core/services/zip-inject.js';
 import {
   AWAITING_UPLOAD_TTL_MS,
   REVIEW_QUEUE_RETENTION_MS,
@@ -34,8 +36,38 @@ export interface ContractRepos {
   admin: AdminRepository;
   /** Org repository. Optional so a backend can opt out, though both adapters provide it. */
   org?: OrgRepository;
+  /** Entitlement repository (Tier-2 paid kits). Both adapters provide it. */
+  entitlement?: EntitlementRepository;
   /** Truncate/recreate all backing tables so each test starts clean. */
   reset: () => Promise<void>;
+}
+
+/**
+ * A minimal in-memory ObjectStore for the watermark tests: `put` seeds raw bytes
+ * under a key, `readStream` yields them back. Only `put`/`readStream` are used by
+ * the licensed-package handler path; the rest throw to surface misuse.
+ */
+export class FakeObjectStore implements ObjectStore {
+  private readonly objects = new Map<string, Buffer>();
+  put(key: string, bytes: Buffer): void { this.objects.set(key, bytes); }
+  async ensureBucket(): Promise<void> {}
+  async createUploadUrl(): Promise<string> { throw new Error('not implemented'); }
+  async createDownloadUrl(): Promise<string> { throw new Error('not implemented'); }
+  async exists(key: string): Promise<boolean> { return this.objects.has(key); }
+  async readStream(key: string): Promise<AsyncIterable<Uint8Array>> {
+    const bytes = this.objects.get(key);
+    if (!bytes) throw new Error(`Object not found: ${key}`);
+    async function* gen(): AsyncIterable<Uint8Array> { yield bytes!; }
+    return gen();
+  }
+}
+
+/** Builds a minimal valid (empty) zip with one stored file, for watermark tests. */
+export function makeMinimalZip(): Buffer {
+  // Start from an empty zip (EOCD-only) and inject a README so it is a real archive.
+  const emptyEocd = Buffer.alloc(22);
+  emptyEocd.writeUInt32LE(0x06054b50, 0);
+  return injectFileIntoZip(emptyEocd, 'README.md', 'hello kit');
 }
 
 /** A repos factory. Called once; `reset` is called before each test. */
@@ -675,5 +707,315 @@ export function runRepositoryContract(name: string, makeRepos: MakeRepos): void 
         });
       });
     });
+
+    describe('paid/licensed kits (Tier-2)', () => {
+      function ent(): EntitlementRepository {
+        if (!repos.entitlement) {
+          throw new Error('EntitlementRepository not provided by this backend');
+        }
+        return repos.entitlement;
+      }
+
+      async function publishKit(input: CreateSubmissionInput): Promise<string> {
+        const queued = await uploadAndQueue(repos.admin, input);
+        const kit = await repos.admin.publishSubmission(
+          { ...queued, validationStatus: 'passed' },
+          new Date().toISOString(),
+        );
+        return kit.kitId;
+      }
+
+      function req(method: string, resource: string, pathParameters: Record<string, string>, body?: unknown): CoreRequest {
+        return {
+          method,
+          resource,
+          pathParameters,
+          queryStringParameters: null,
+          headers: { 'x-agentkitmarket-admin-key': 'test-admin-key' },
+          body: body === undefined ? null : JSON.stringify(body),
+        };
+      }
+
+      function deps(extra?: Partial<RouterDeps>): RouterDeps {
+        return {
+          repository: repos.catalog,
+          adminRepository: repos.admin,
+          orgRepository: repos.org,
+          entitlementRepository: repos.entitlement,
+          adminKey: 'test-admin-key',
+          ...extra,
+        };
+      }
+
+      describe('set pricing', () => {
+        it('owner can set a one-time paid price; validation passes', async () => {
+          const kitId = await publishKit(baseInput());
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/pricing', { kitId }, {
+              actorUserId: 'user_1', pricing: 'paid', priceModel: 'one_time', priceCents: 1500,
+            }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(200);
+          const body = JSON.parse(res.body).item;
+          expect(body.pricing).toBe('paid');
+          expect(body.priceCents).toBe(1500);
+          expect(body.downloadable).toBe(false);
+          expect(body.licenseVersion).toBe(DEFAULT_KIT_LICENSE_VERSION);
+
+          const kit = await repos.admin.getKit(kitId);
+          expect(kit?.pricing).toBe('paid');
+          expect(kit?.priceCents).toBe(1500);
+        });
+
+        it('subscription requires an interval (400 without)', async () => {
+          const kitId = await publishKit(baseInput());
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/pricing', { kitId }, {
+              actorUserId: 'user_1', pricing: 'paid', priceModel: 'subscription', priceCents: 999,
+            }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(400);
+          expect(JSON.parse(res.body).message).toMatch(/interval/i);
+        });
+
+        it('paid requires a positive priceCents (400 when zero)', async () => {
+          const kitId = await publishKit(baseInput());
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/pricing', { kitId }, {
+              actorUserId: 'user_1', pricing: 'paid', priceModel: 'one_time', priceCents: 0,
+            }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(400);
+          expect(JSON.parse(res.body).message).toMatch(/priceCents/i);
+        });
+
+        it('a non-owner is forbidden (403)', async () => {
+          const kitId = await publishKit(baseInput());
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/pricing', { kitId }, {
+              actorUserId: 'someone_else', pricing: 'paid', priceModel: 'one_time', priceCents: 500,
+            }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(403);
+        });
+
+        it('an org admin (non-owner) can set pricing', async () => {
+          const kitId = await publishKit(baseInput());
+          // Assign the kit to a team org and make u_admin an active admin there.
+          const team = await repos.org!.createOrg({ displayName: 'Pricing Team', ownerUserId: 'user_1' });
+          await repos.org!.setKitOwnerOrg(kitId, team.orgId);
+          await repos.org!.addMember(team.orgId, 'u_admin', 'admin', 'user_1');
+          await repos.org!.acceptInvite(team.orgId, 'u_admin');
+
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/pricing', { kitId }, {
+              actorUserId: 'u_admin', pricing: 'paid', priceModel: 'one_time', priceCents: 700,
+            }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(200);
+        });
+
+        it('custom license is stored and resolves as the effective license', async () => {
+          const kitId = await publishKit(baseInput());
+          await routeRequest(
+            req('POST', '/admin/kits/{kitId}/pricing', { kitId }, {
+              actorUserId: 'user_1', pricing: 'paid', priceModel: 'one_time', priceCents: 200,
+              licenseType: 'custom', licenseText: 'My bespoke EULA',
+            }),
+            deps(),
+          );
+          const kit = await repos.admin.getKit(kitId);
+          expect(kit?.licenseType).toBe('custom');
+          expect(kit?.licenseText).toBe('My bespoke EULA');
+        });
+      });
+
+      describe('grant / get / list / revoke', () => {
+        async function grant(kitId: string, userId: string, source = 'admin_grant'): Promise<void> {
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/entitlements', { kitId }, {
+              userId, source, licenseVersion: DEFAULT_KIT_LICENSE_VERSION,
+              licenseAcceptedAt: new Date().toISOString(), licenseTextSnapshot: DEFAULT_KIT_LICENSE,
+            }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(201);
+        }
+
+        it('grants, reads back, lists, and revokes', async () => {
+          const kitId = await publishKit(baseInput());
+          await grant(kitId, 'buyer_1');
+
+          const got = await ent().getEntitlement('buyer_1', kitId);
+          expect(got?.status).toBe('active');
+          expect(got?.entitlementId).toMatch(/^ent_/);
+
+          // GET single via route → 200
+          const getRes = await routeRequest(
+            req('GET', '/admin/kits/{kitId}/entitlements/{userId}', { kitId, userId: 'buyer_1' }),
+            deps(),
+          );
+          expect(getRes.statusCode).toBe(200);
+
+          const listRes = await routeRequest(
+            req('GET', '/admin/users/{userId}/entitlements', { userId: 'buyer_1' }),
+            deps(),
+          );
+          expect(JSON.parse(listRes.body).items).toHaveLength(1);
+
+          const revoked = await ent().revokeEntitlement('buyer_1', kitId);
+          expect(revoked?.status).toBe('revoked');
+          // revoked entitlements drop out of the active "My Purchases" list.
+          const listAfter = await routeRequest(
+            req('GET', '/admin/users/{userId}/entitlements', { userId: 'buyer_1' }),
+            deps(),
+          );
+          expect(JSON.parse(listAfter.body).items).toHaveLength(0);
+        });
+
+        it('grant is idempotent on (userId,kitId) and keeps the entitlementId', async () => {
+          const kitId = await publishKit(baseInput());
+          await grant(kitId, 'buyer_2');
+          const first = await ent().getEntitlement('buyer_2', kitId);
+          await ent().revokeEntitlement('buyer_2', kitId);
+          await grant(kitId, 'buyer_2');
+          const second = await ent().getEntitlement('buyer_2', kitId);
+          expect(second?.entitlementId).toBe(first?.entitlementId);
+          expect(second?.status).toBe('active');
+        });
+
+        it('GET single returns 404 without an entitlement', async () => {
+          const kitId = await publishKit(baseInput());
+          const res = await routeRequest(
+            req('GET', '/admin/kits/{kitId}/entitlements/{userId}', { kitId, userId: 'nobody' }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(404);
+        });
+
+        it('free-kit grant path records source=free', async () => {
+          const kitId = await publishKit(baseInput());
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/entitlements', { kitId }, {
+              userId: 'free_user', source: 'free', licenseVersion: DEFAULT_KIT_LICENSE_VERSION,
+              licenseAcceptedAt: new Date().toISOString(), licenseTextSnapshot: DEFAULT_KIT_LICENSE,
+            }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(201);
+          expect(JSON.parse(res.body).item.source).toBe('free');
+        });
+      });
+
+      describe('licensed-package (watermarked, entitlement-gated)', () => {
+        async function setupPaidKitWithPackage(): Promise<{ kitId: string; store: FakeObjectStore }> {
+          const kitId = await publishKit(baseInput());
+          await routeRequest(
+            req('POST', '/admin/kits/{kitId}/pricing', { kitId }, {
+              actorUserId: 'user_1', pricing: 'paid', priceModel: 'one_time', priceCents: 1000,
+            }),
+            deps(),
+          );
+          const kit = await repos.admin.getKit(kitId);
+          const version = await repos.admin.getKitVersion(kitId, kit!.currentVersion!);
+          const store = new FakeObjectStore();
+          store.put(version!.packageS3Key!, makeMinimalZip());
+          return { kitId, store };
+        }
+
+        it('returns watermarked content for an active entitlement', async () => {
+          const { kitId, store } = await setupPaidKitWithPackage();
+          await routeRequest(
+            req('POST', '/admin/kits/{kitId}/entitlements', { kitId }, {
+              userId: 'buyer', source: 'purchase', licenseVersion: DEFAULT_KIT_LICENSE_VERSION,
+              licenseAcceptedAt: new Date().toISOString(), licenseTextSnapshot: DEFAULT_KIT_LICENSE,
+            }),
+            deps(),
+          );
+
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/licensed-package', { kitId }, { userId: 'buyer' }),
+            deps({ objectStore: store }),
+          );
+          expect(res.statusCode).toBe(200);
+          const body = JSON.parse(res.body);
+          expect(body.entitlementId).toMatch(/^ent_/);
+          expect(typeof body.contentBase64).toBe('string');
+          // The watermarked zip must contain the per-buyer license canary.
+          const bytes = Buffer.from(body.contentBase64, 'base64');
+          const text = bytes.toString('latin1');
+          expect(text).toContain('.agentkit-license/LICENSE.txt');
+          expect(text).toContain('AGENTKITMARKET LICENSE CANARY');
+          expect(text).toContain(body.watermark.hash);
+        });
+
+        it('403 without any entitlement', async () => {
+          const { kitId, store } = await setupPaidKitWithPackage();
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/licensed-package', { kitId }, { userId: 'stranger' }),
+            deps({ objectStore: store }),
+          );
+          expect(res.statusCode).toBe(403);
+        });
+
+        it('403 after the entitlement is revoked', async () => {
+          const { kitId, store } = await setupPaidKitWithPackage();
+          await routeRequest(
+            req('POST', '/admin/kits/{kitId}/entitlements', { kitId }, {
+              userId: 'buyer', source: 'purchase', licenseVersion: DEFAULT_KIT_LICENSE_VERSION,
+              licenseAcceptedAt: new Date().toISOString(), licenseTextSnapshot: DEFAULT_KIT_LICENSE,
+            }),
+            deps(),
+          );
+          await ent().revokeEntitlement('buyer', kitId);
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/licensed-package', { kitId }, { userId: 'buyer' }),
+            deps({ objectStore: store }),
+          );
+          expect(res.statusCode).toBe(403);
+        });
+      });
+
+      describe('public download guard', () => {
+        it('refuses a paid kit via the public download route (402)', async () => {
+          const kitId = await publishKit(baseInput());
+          await routeRequest(
+            req('POST', '/admin/kits/{kitId}/pricing', { kitId }, {
+              actorUserId: 'user_1', pricing: 'paid', priceModel: 'one_time', priceCents: 1000,
+            }),
+            deps(),
+          );
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/download-url', { kitId }),
+            deps({ packageUploadService: stubPackageUploadService() }),
+          );
+          expect(res.statusCode).toBe(402);
+        });
+
+        it('still allows a free kit via the public download route', async () => {
+          const kitId = await publishKit(baseInput());
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/download-url', { kitId }),
+            deps({ packageUploadService: stubPackageUploadService() }),
+          );
+          expect(res.statusCode).toBe(200);
+        });
+      });
+    });
   });
+}
+
+/** A stub PackageUploadService so the download-guard test does not hit a real store. */
+function stubPackageUploadService() {
+  return {
+    async createUploadUrl(): Promise<string> { return 'https://example.test/upload'; },
+    async createDownloadUrl(): Promise<string> { return 'https://example.test/download'; },
+    async packageExists(): Promise<boolean> { return true; },
+    async enqueueValidationJob(): Promise<void> {},
+  };
 }

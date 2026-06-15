@@ -29,6 +29,8 @@ import { randomUUID } from 'node:crypto';
 import type {
   AdminRepository,
   CatalogRepository,
+  EntitlementRepository,
+  KitPricingUpdate,
   ObjectStore,
   OrgRepository,
   PackageUploadService,
@@ -40,6 +42,8 @@ import type {
   CatalogPage,
   CreateSubmissionInput,
   CreateSubmissionResult,
+  Entitlement,
+  GrantEntitlementInput,
   KitRecord,
   KitVersionRecord,
   KitVisibility,
@@ -432,6 +436,17 @@ export function createDynamoAdminRepository(config: DynamoAdminConfig): AdminRep
         ownerOrgId: existingKit?.ownerOrgId ?? submission.ownerOrgId,
         // Visibility is preserved across re-publishes; defaults to public on first publish.
         visibility: existingKit?.visibility ?? 'public',
+        // Tier-2 pricing/license is preserved across re-publishes (set via the
+        // pricing route, not at publish time).
+        pricing: existingKit?.pricing,
+        priceModel: existingKit?.priceModel,
+        priceCents: existingKit?.priceCents,
+        currency: existingKit?.currency,
+        interval: existingKit?.interval,
+        downloadable: existingKit?.downloadable,
+        licenseType: existingKit?.licenseType,
+        licenseText: existingKit?.licenseText,
+        licenseVersion: existingKit?.licenseVersion,
         publisher: toKitPublisherSnapshot(submission.publisherId, submission.publisherSnapshot),
         status: PUBLIC_STATUS,
         validationStatus: PUBLIC_VALIDATION_STATUS,
@@ -608,6 +623,38 @@ export function createDynamoAdminRepository(config: DynamoAdminConfig): AdminRep
       }));
 
       return (result.Items ?? []).filter(isKitRecord)[0];
+    },
+
+    async setKitPricing(kitId: string, pricing: KitPricingUpdate): Promise<KitRecord | undefined> {
+      const existing = await dynamo.send(new GetCommand({ TableName: kitsTableName, Key: { kitId } }));
+      if (!isKitRecord(existing.Item)) {
+        return undefined;
+      }
+      const updatedAt = new Date().toISOString();
+      const result = await dynamo.send(new UpdateCommand({
+        TableName: kitsTableName,
+        Key: { kitId },
+        // removeUndefinedValues drops cleared fields (free kits clear price/model/interval).
+        UpdateExpression:
+          'SET pricing = :pricing, priceModel = :priceModel, priceCents = :priceCents, currency = :currency, '
+          + '#interval = :interval, downloadable = :downloadable, licenseType = :licenseType, '
+          + 'licenseText = :licenseText, licenseVersion = :licenseVersion, updatedAt = :updatedAt',
+        ExpressionAttributeNames: { '#interval': 'interval' },
+        ExpressionAttributeValues: {
+          ':pricing': pricing.pricing,
+          ':priceModel': pricing.priceModel,
+          ':priceCents': pricing.priceCents,
+          ':currency': pricing.currency,
+          ':interval': pricing.interval,
+          ':downloadable': pricing.downloadable,
+          ':licenseType': pricing.licenseType,
+          ':licenseText': pricing.licenseText,
+          ':licenseVersion': pricing.licenseVersion,
+          ':updatedAt': updatedAt,
+        },
+        ReturnValues: 'ALL_NEW',
+      }));
+      return isKitRecord(result.Attributes) ? result.Attributes : undefined;
     },
 
     async getKitVersion(kitId: string, version: string): Promise<KitVersionRecord | undefined> {
@@ -991,6 +1038,103 @@ export function createDynamoOrgRepository(config: DynamoOrgConfig): OrgRepositor
       return (result.Items ?? [])
         .filter(isKitRecord)
         .sort((a, b) => a.kitId.localeCompare(b.kitId));
+    },
+  };
+}
+
+/** Config for the DynamoDB entitlement repository (Tier-2 paid kits). */
+export interface DynamoEntitlementConfig {
+  entitlementsTableName: string;
+  /** Optional client overrides (dynamodb-local). Omit for hosted. */
+  client?: DynamoClientOverrides;
+}
+
+function isEntitlement(item: unknown): item is Entitlement {
+  return typeof item === 'object' && item !== null
+    && typeof (item as { entitlementId?: unknown }).entitlementId === 'string'
+    && typeof (item as { userId?: unknown }).userId === 'string'
+    && typeof (item as { kitId?: unknown }).kitId === 'string';
+}
+
+/**
+ * DynamoDB entitlement repository. PK userId / SK kitId (hot path "does U hold
+ * K?"), GSI kitId-index for seller/admin analytics. Idempotent grant on
+ * (userId,kitId) via Put (full overwrite to active).
+ */
+export function createDynamoEntitlementRepository(config: DynamoEntitlementConfig): EntitlementRepository {
+  const { entitlementsTableName } = config;
+  const dynamo = buildDynamoDocumentClient(config.client);
+
+  return {
+    async grantEntitlement(input: GrantEntitlementInput): Promise<Entitlement> {
+      const existing = await dynamo.send(new GetCommand({
+        TableName: entitlementsTableName,
+        Key: { userId: input.userId, kitId: input.kitId },
+      }));
+      const prior = isEntitlement(existing.Item) ? existing.Item : undefined;
+      const now = new Date().toISOString();
+      const entitlement: Entitlement = {
+        // Re-granting keeps the original entitlementId + grantedAt so the
+        // watermark canary stays stable for a buyer across re-grants.
+        entitlementId: prior?.entitlementId ?? `ent_${randomUUID()}`,
+        kitId: input.kitId,
+        userId: input.userId,
+        status: 'active',
+        source: input.source,
+        licenseVersion: input.licenseVersion,
+        licenseAcceptedAt: input.licenseAcceptedAt,
+        licenseTextSnapshot: input.licenseTextSnapshot,
+        grantedAt: prior?.grantedAt ?? now,
+        expiresAt: input.expiresAt,
+        stripeSubscriptionId: input.stripeSubscriptionId ?? null,
+      };
+      await dynamo.send(new PutCommand({ TableName: entitlementsTableName, Item: entitlement }));
+      return entitlement;
+    },
+
+    async getEntitlement(userId: string, kitId: string): Promise<Entitlement | undefined> {
+      const result = await dynamo.send(new GetCommand({
+        TableName: entitlementsTableName,
+        Key: { userId, kitId },
+      }));
+      return isEntitlement(result.Item) ? result.Item : undefined;
+    },
+
+    async listEntitlementsForUser(userId: string): Promise<Entitlement[]> {
+      const result = await dynamo.send(new QueryCommand({
+        TableName: entitlementsTableName,
+        KeyConditionExpression: 'userId = :userId',
+        ExpressionAttributeValues: { ':userId': userId },
+      }));
+      return (result.Items ?? []).filter(isEntitlement).sort((a, b) => a.grantedAt.localeCompare(b.grantedAt));
+    },
+
+    async revokeEntitlement(userId: string, kitId: string): Promise<Entitlement | undefined> {
+      try {
+        const result = await dynamo.send(new UpdateCommand({
+          TableName: entitlementsTableName,
+          Key: { userId, kitId },
+          UpdateExpression: 'SET #status = :revoked',
+          ConditionExpression: 'attribute_exists(userId)',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: { ':revoked': 'revoked' },
+          ReturnValues: 'ALL_NEW',
+        }));
+        return isEntitlement(result.Attributes) ? result.Attributes : undefined;
+      } catch (error) {
+        if ((error as { name?: string })?.name === 'ConditionalCheckFailedException') return undefined;
+        throw error;
+      }
+    },
+
+    async listEntitlementsForKit(kitId: string): Promise<Entitlement[]> {
+      const result = await dynamo.send(new QueryCommand({
+        TableName: entitlementsTableName,
+        IndexName: 'kitId-index',
+        KeyConditionExpression: 'kitId = :kitId',
+        ExpressionAttributeValues: { ':kitId': kitId },
+      }));
+      return (result.Items ?? []).filter(isEntitlement).sort((a, b) => a.grantedAt.localeCompare(b.grantedAt));
     },
   };
 }

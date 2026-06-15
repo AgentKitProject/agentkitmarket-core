@@ -8,6 +8,8 @@
 export {
   createPostgresCatalogRepository,
   createPostgresAdminRepository,
+  createPostgresOrgRepository,
+  createPostgresEntitlementRepository,
 } from './postgres.js';
 export type { PgPool, PgPoolClient, PgQueryable } from './postgres.js';
 

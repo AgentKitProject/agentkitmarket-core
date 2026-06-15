@@ -20,6 +20,8 @@ import { randomUUID } from 'node:crypto';
 import type {
   AdminRepository,
   CatalogRepository,
+  EntitlementRepository,
+  KitPricingUpdate,
   OrgRepository,
   SubmissionValidationUpdate,
   ValidationJobUpdate,
@@ -29,6 +31,8 @@ import type {
   CatalogPage,
   CreateSubmissionInput,
   CreateSubmissionResult,
+  Entitlement,
+  GrantEntitlementInput,
   KitRecord,
   KitVersionRecord,
   KitVisibility,
@@ -112,6 +116,15 @@ function rowToKit(row: any): KitRecord {
     ownerUserId: str(row.owner_user_id),
     ownerOrgId: str(row.owner_org_id),
     visibility: str(row.visibility) as KitRecord['visibility'],
+    pricing: str(row.pricing) as KitRecord['pricing'],
+    priceModel: str(row.price_model) as KitRecord['priceModel'],
+    priceCents: num(row.price_cents),
+    currency: str(row.currency),
+    interval: str(row.interval) as KitRecord['interval'],
+    downloadable: row.downloadable === null || row.downloadable === undefined ? undefined : row.downloadable,
+    licenseType: str(row.license_type) as KitRecord['licenseType'],
+    licenseText: str(row.license_text),
+    licenseVersion: str(row.license_version),
     publisher: json(row.publisher),
     status: row.status,
     validationStatus: row.validation_status,
@@ -242,6 +255,22 @@ function rowToInvite(row: any): OrgInvite {
     role: row.role,
     invitedByUserId: row.invited_by_user_id,
     createdAt: row.created_at,
+  };
+}
+
+function rowToEntitlement(row: any): Entitlement {
+  return {
+    entitlementId: row.entitlement_id,
+    kitId: row.kit_id,
+    userId: row.user_id,
+    status: row.status,
+    source: row.source,
+    licenseVersion: row.license_version,
+    licenseAcceptedAt: row.license_accepted_at,
+    licenseTextSnapshot: row.license_text_snapshot,
+    grantedAt: row.granted_at,
+    expiresAt: str(row.expires_at),
+    stripeSubscriptionId: row.stripe_subscription_id ?? null,
   };
 }
 
@@ -518,6 +547,17 @@ export function createPostgresAdminRepository(pool: PgPool): AdminRepository {
           ownerOrgId: existingKit?.ownerOrgId ?? submission.ownerOrgId,
           // Visibility is preserved across re-publishes; defaults to public on first publish.
           visibility: existingKit?.visibility ?? 'public',
+          // Tier-2 pricing/license is preserved across re-publishes (set via the
+          // pricing route, not at publish time).
+          pricing: existingKit?.pricing,
+          priceModel: existingKit?.priceModel,
+          priceCents: existingKit?.priceCents,
+          currency: existingKit?.currency,
+          interval: existingKit?.interval,
+          downloadable: existingKit?.downloadable,
+          licenseType: existingKit?.licenseType,
+          licenseText: existingKit?.licenseText,
+          licenseVersion: existingKit?.licenseVersion,
           publisher: toKitPublisherSnapshot(submission.publisherId, submission.publisherSnapshot),
           status: PUBLIC_STATUS,
           validationStatus: PUBLIC_VALIDATION_STATUS,
@@ -634,6 +674,35 @@ export function createPostgresAdminRepository(pool: PgPool): AdminRepository {
 
     async getKitBySlug(slug: string): Promise<KitRecord | undefined> {
       const result = await pool.query(`SELECT * FROM kits WHERE slug = $1 LIMIT 1`, [slug]);
+      const row = result.rows[0];
+      return row ? rowToKit(row) : undefined;
+    },
+
+    async setKitPricing(kitId: string, pricing: KitPricingUpdate): Promise<KitRecord | undefined> {
+      const existing = await getKitRow(pool, kitId);
+      if (!existing) {
+        return undefined;
+      }
+      const result = await pool.query(
+        `UPDATE kits SET
+           pricing = $2, price_model = $3, price_cents = $4, currency = $5, interval = $6,
+           downloadable = $7, license_type = $8, license_text = $9, license_version = $10,
+           updated_at = $11
+         WHERE kit_id = $1 RETURNING *`,
+        [
+          kitId,
+          pricing.pricing,
+          pricing.priceModel ?? null,
+          pricing.priceCents ?? null,
+          pricing.currency,
+          pricing.interval ?? null,
+          pricing.downloadable,
+          pricing.licenseType,
+          pricing.licenseText ?? null,
+          pricing.licenseVersion,
+          new Date().toISOString(),
+        ],
+      );
       const row = result.rows[0];
       return row ? rowToKit(row) : undefined;
     },
@@ -766,9 +835,12 @@ async function upsertKit(pool: PgQueryable, k: KitRecord): Promise<void> {
        review_status, current_version, verification_status, description, import_url, download_url,
        created_at, updated_at, published_at, removed_at, downloads, featured, featured_rank,
        publisher, categories, tags, badges, required_inputs, prepared_prompts, skills,
-       validation_summary, latest_version, owner_org_id, visibility
+       validation_summary, latest_version, owner_org_id, visibility,
+       pricing, price_model, price_cents, currency, interval, downloadable,
+       license_type, license_text, license_version
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,
+       $33,$34,$35,$36,$37,$38,$39,$40,$41
      )
      ON CONFLICT (kit_id) DO UPDATE SET
        slug = EXCLUDED.slug, name = EXCLUDED.name, summary = EXCLUDED.summary,
@@ -785,7 +857,12 @@ async function upsertKit(pool: PgQueryable, k: KitRecord): Promise<void> {
        categories = EXCLUDED.categories, tags = EXCLUDED.tags, badges = EXCLUDED.badges,
        required_inputs = EXCLUDED.required_inputs, prepared_prompts = EXCLUDED.prepared_prompts,
        skills = EXCLUDED.skills, validation_summary = EXCLUDED.validation_summary,
-       latest_version = EXCLUDED.latest_version`,
+       latest_version = EXCLUDED.latest_version,
+       pricing = EXCLUDED.pricing, price_model = EXCLUDED.price_model,
+       price_cents = EXCLUDED.price_cents, currency = EXCLUDED.currency,
+       interval = EXCLUDED.interval, downloadable = EXCLUDED.downloadable,
+       license_type = EXCLUDED.license_type, license_text = EXCLUDED.license_text,
+       license_version = EXCLUDED.license_version`,
     [
       k.kitId, k.slug, k.name, k.summary, k.publisherId, k.ownerUserId ?? null, k.status,
       k.validationStatus, k.reviewStatus, k.currentVersion ?? null, k.verificationStatus ?? null,
@@ -796,6 +873,9 @@ async function upsertKit(pool: PgQueryable, k: KitRecord): Promise<void> {
       jb(k.publisher), jb(k.categories), jb(k.tags), jb(k.badges), jb(k.requiredInputs),
       jb(k.preparedPrompts), jb(k.skills), jb(k.validationSummary), jb(k.latestVersion),
       k.ownerOrgId ?? null, k.visibility ?? null,
+      k.pricing ?? null, k.priceModel ?? null, k.priceCents ?? null, k.currency ?? null,
+      k.interval ?? null, k.downloadable ?? null, k.licenseType ?? null,
+      k.licenseText ?? null, k.licenseVersion ?? null,
     ],
   );
 }
@@ -1023,6 +1103,85 @@ export function createPostgresOrgRepository(pool: PgPool): OrgRepository {
         [orgId],
       );
       return result.rows.map(rowToKit);
+    },
+  };
+}
+
+// --- entitlement repository (Tier-2 paid kits) ----------------------------------
+
+export function createPostgresEntitlementRepository(pool: PgPool): EntitlementRepository {
+  return {
+    async grantEntitlement(input: GrantEntitlementInput): Promise<Entitlement> {
+      const existing = await pool.query(
+        `SELECT * FROM entitlements WHERE user_id = $1 AND kit_id = $2`,
+        [input.userId, input.kitId],
+      );
+      const prior = existing.rows[0] ? rowToEntitlement(existing.rows[0]) : undefined;
+      const now = new Date().toISOString();
+      const entitlement: Entitlement = {
+        entitlementId: prior?.entitlementId ?? `ent_${randomUUID()}`,
+        kitId: input.kitId,
+        userId: input.userId,
+        status: 'active',
+        source: input.source,
+        licenseVersion: input.licenseVersion,
+        licenseAcceptedAt: input.licenseAcceptedAt,
+        licenseTextSnapshot: input.licenseTextSnapshot,
+        grantedAt: prior?.grantedAt ?? now,
+        expiresAt: input.expiresAt,
+        stripeSubscriptionId: input.stripeSubscriptionId ?? null,
+      };
+      await pool.query(
+        `INSERT INTO entitlements (
+           entitlement_id, kit_id, user_id, status, source, license_version,
+           license_accepted_at, license_text_snapshot, granted_at, expires_at, stripe_subscription_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (user_id, kit_id) DO UPDATE SET
+           status = 'active', source = EXCLUDED.source, license_version = EXCLUDED.license_version,
+           license_accepted_at = EXCLUDED.license_accepted_at,
+           license_text_snapshot = EXCLUDED.license_text_snapshot,
+           expires_at = EXCLUDED.expires_at, stripe_subscription_id = EXCLUDED.stripe_subscription_id`,
+        [
+          entitlement.entitlementId, entitlement.kitId, entitlement.userId, entitlement.status,
+          entitlement.source, entitlement.licenseVersion, entitlement.licenseAcceptedAt,
+          entitlement.licenseTextSnapshot, entitlement.grantedAt, entitlement.expiresAt ?? null,
+          entitlement.stripeSubscriptionId ?? null,
+        ],
+      );
+      return entitlement;
+    },
+
+    async getEntitlement(userId: string, kitId: string): Promise<Entitlement | undefined> {
+      const result = await pool.query(
+        `SELECT * FROM entitlements WHERE user_id = $1 AND kit_id = $2`,
+        [userId, kitId],
+      );
+      return result.rows[0] ? rowToEntitlement(result.rows[0]) : undefined;
+    },
+
+    async listEntitlementsForUser(userId: string): Promise<Entitlement[]> {
+      const result = await pool.query(
+        `SELECT * FROM entitlements WHERE user_id = $1 ORDER BY granted_at`,
+        [userId],
+      );
+      return result.rows.map(rowToEntitlement);
+    },
+
+    async revokeEntitlement(userId: string, kitId: string): Promise<Entitlement | undefined> {
+      const result = await pool.query(
+        `UPDATE entitlements SET status = 'revoked'
+           WHERE user_id = $1 AND kit_id = $2 RETURNING *`,
+        [userId, kitId],
+      );
+      return result.rows[0] ? rowToEntitlement(result.rows[0]) : undefined;
+    },
+
+    async listEntitlementsForKit(kitId: string): Promise<Entitlement[]> {
+      const result = await pool.query(
+        `SELECT * FROM entitlements WHERE kit_id = $1 ORDER BY granted_at`,
+        [kitId],
+      );
+      return result.rows.map(rowToEntitlement);
     },
   };
 }

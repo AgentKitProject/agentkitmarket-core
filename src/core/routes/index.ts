@@ -24,6 +24,8 @@ import type {
 import type {
   AdminRepository,
   CatalogRepository,
+  EntitlementRepository,
+  ObjectStore,
   OrgRepository,
   PackageUploadService,
 } from '../ports.js';
@@ -34,7 +36,25 @@ import {
   removeOrgMemberRequestSchema,
   setKitVisibilityRequestSchema,
   transferKitRequestSchema,
+  setKitPricingRequestSchema,
+  grantEntitlementRequestSchema,
+  licensedPackageRequestSchema,
 } from '@agentkitforge/contracts';
+import {
+  resolveKitPricingUpdate,
+  effectiveLicenseText,
+  isEntitlementActive,
+  isKitDownloadable,
+  buildWatermark,
+  buildLicenseFileContent,
+} from '../services/pricing.js';
+import { injectFileIntoZip, collectStream } from '../services/zip-inject.js';
+import { createHash } from 'node:crypto';
+
+/** sha256 hex of a buffer (server-computed digest of the watermarked package). */
+function createHashHex(buf: Buffer): string {
+  return createHash('sha256').update(buf).digest('hex');
+}
 import type { CoreRequest, CoreResponse, RouterDeps } from './types.js';
 import {
   ADMIN_HEADER,
@@ -236,6 +256,29 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/visibility') {
         return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => setKitVisibilityHandler(request, adminRepository, repo, allowedOrigins));
+      }
+
+      // --- Tier-2 paid/licensed kits (Seam B) ---
+      const entitlementRepository = deps.entitlementRepository;
+
+      if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/pricing') {
+        return setKitPricingHandler(request, adminRepository, orgRepository, allowedOrigins);
+      }
+
+      if (request.method === 'GET' && request.resource === '/admin/users/{userId}/entitlements') {
+        return withEntitlementRepo(request, allowedOrigins, entitlementRepository, (repo) => listUserEntitlementsHandler(request, repo, allowedOrigins));
+      }
+
+      if (request.method === 'GET' && request.resource === '/admin/kits/{kitId}/entitlements/{userId}') {
+        return withEntitlementRepo(request, allowedOrigins, entitlementRepository, (repo) => getEntitlementHandler(request, repo, allowedOrigins));
+      }
+
+      if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/entitlements') {
+        return withEntitlementRepo(request, allowedOrigins, entitlementRepository, (repo) => grantEntitlementHandler(request, adminRepository, repo, allowedOrigins));
+      }
+
+      if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/licensed-package') {
+        return withEntitlementRepo(request, allowedOrigins, entitlementRepository, (repo) => licensedPackageHandler(request, adminRepository, repo, deps.objectStore, allowedOrigins));
       }
     }
 
@@ -880,6 +923,18 @@ async function createKitDownloadUrl(
     return json(request, allowedOrigins, 404, { message: 'Kit not found' });
   }
 
+  // Tier-2 guard: a paid kit must never be served via the public presigned
+  // download. Buyers must go through the entitlement-gated licensed-package
+  // route, which injects a per-buyer watermark. Free (and explicitly
+  // downloadable) kits behave exactly as before.
+  if (!isKitDownloadable(kit)) {
+    return json(request, allowedOrigins, 402, {
+      message: 'This kit is paid. Acquire an entitlement and use the licensed-package route to download it.',
+      pricing: 'paid',
+      kitId: kit.kitId,
+    });
+  }
+
   if (!kit.currentVersion) {
     return json(request, allowedOrigins, 409, { message: 'Kit has no current version' });
   }
@@ -1248,6 +1303,220 @@ async function setKitVisibilityHandler(
   const updated = await orgRepository.setKitVisibility(kitId, parsed.data.visibility as KitVisibility);
   return json(request, allowedOrigins, 200, {
     item: { kitId, visibility: updated?.visibility ?? parsed.data.visibility, updatedAt: updated?.updatedAt ?? null },
+  });
+}
+
+// --- Tier-2 paid/licensed kits --------------------------------------------------
+
+function withEntitlementRepo(
+  request: CoreRequest,
+  allowedOrigins: string[],
+  entitlementRepository: EntitlementRepository | undefined,
+  handler: (repo: EntitlementRepository) => Promise<CoreResponse>,
+): Promise<CoreResponse> {
+  if (!entitlementRepository) {
+    return Promise.resolve(json(request, allowedOrigins, 500, {
+      message: 'Entitlements are not configured',
+    }));
+  }
+  return handler(entitlementRepository);
+}
+
+/**
+ * POST /admin/kits/{kitId}/pricing. Role-gated: the actor must be the kit owner
+ * or an active owner/admin of the kit's owning org. Validates paid/subscription
+ * rules, resolves licenseVersion, and persists. Returns the updated kit.
+ */
+async function setKitPricingHandler(
+  request: CoreRequest,
+  adminRepository: AdminRepository,
+  orgRepository: OrgRepository | undefined,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const kitId = request.pathParameters?.kitId;
+  if (!kitId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing kitId' });
+  }
+  const parsed = setKitPricingRequestSchema.safeParse(parseJsonBody(request));
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid pricing payload' });
+  }
+  const { actorUserId } = parsed.data;
+
+  const kit = await adminRepository.getKit(kitId);
+  if (!kit) {
+    return json(request, allowedOrigins, 404, { message: 'Kit not found' });
+  }
+
+  // Role gate: kit owner, or active owner/admin of the kit's owning org.
+  let mayManage = kit.ownerUserId === actorUserId;
+  if (!mayManage && orgRepository) {
+    const membership = await resolveKitMembership(orgRepository, kit, actorUserId);
+    mayManage = !!membership && MANAGE_ROLES.has(membership.role);
+  }
+  if (!mayManage) {
+    return json(request, allowedOrigins, 403, { message: 'Only an owner or admin of the kit can set its pricing' });
+  }
+
+  const update = resolveKitPricingUpdate(parsed.data);
+  if (update instanceof Error) {
+    return json(request, allowedOrigins, 400, { message: update.message });
+  }
+
+  const updated = await adminRepository.setKitPricing(kitId, update);
+  return json(request, allowedOrigins, 200, {
+    item: {
+      kitId,
+      pricing: update.pricing,
+      priceModel: update.priceModel ?? null,
+      priceCents: update.priceCents ?? null,
+      currency: update.currency,
+      interval: update.interval ?? null,
+      downloadable: update.downloadable,
+      licenseType: update.licenseType,
+      licenseVersion: update.licenseVersion,
+      updatedAt: updated?.updatedAt ?? null,
+    },
+  });
+}
+
+async function listUserEntitlementsHandler(
+  request: CoreRequest,
+  repo: EntitlementRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const userId = request.pathParameters?.userId;
+  if (!userId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing userId' });
+  }
+  const all = await repo.listEntitlementsForUser(userId);
+  // "My Purchases" surfaces currently-active entitlements only.
+  const items = all.filter((e) => isEntitlementActive(e));
+  return json(request, allowedOrigins, 200, { items });
+}
+
+async function getEntitlementHandler(
+  request: CoreRequest,
+  repo: EntitlementRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const kitId = request.pathParameters?.kitId;
+  const userId = request.pathParameters?.userId;
+  if (!kitId || !userId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing kitId or userId' });
+  }
+  const entitlement = await repo.getEntitlement(userId, kitId);
+  if (!entitlement) {
+    return json(request, allowedOrigins, 404, { message: 'Entitlement not found' });
+  }
+  return json(request, allowedOrigins, 200, { item: entitlement });
+}
+
+async function grantEntitlementHandler(
+  request: CoreRequest,
+  adminRepository: AdminRepository,
+  repo: EntitlementRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const kitId = request.pathParameters?.kitId;
+  if (!kitId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing kitId' });
+  }
+  const parsed = grantEntitlementRequestSchema.safeParse(parseJsonBody(request));
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid grant payload' });
+  }
+
+  const kit = await adminRepository.getKit(kitId);
+  if (!kit) {
+    return json(request, allowedOrigins, 404, { message: 'Kit not found' });
+  }
+
+  const entitlement = await repo.grantEntitlement({
+    kitId,
+    userId: parsed.data.userId,
+    source: parsed.data.source,
+    licenseVersion: parsed.data.licenseVersion,
+    licenseAcceptedAt: parsed.data.licenseAcceptedAt,
+    licenseTextSnapshot: parsed.data.licenseTextSnapshot,
+    expiresAt: parsed.data.expiresAt,
+    stripeSubscriptionId: parsed.data.stripeSubscriptionId ?? null,
+  });
+  return json(request, allowedOrigins, 201, { item: entitlement });
+}
+
+/**
+ * POST /admin/kits/{kitId}/licensed-package. Entitlement-gated fetch. Verifies an
+ * ACTIVE (non-expired) entitlement for (userId,kitId); 403 otherwise. Reads the
+ * current version's package from the ObjectStore, injects a per-buyer watermark
+ * at `.agentkit-license/LICENSE.txt`, and returns the watermarked bytes (base64).
+ *
+ * The PUBLIC presigned-download path refuses paid kits (see createKitDownloadUrl),
+ * so this is the only way to obtain a paid kit's bytes. NOTE: online-only
+ * enforcement (no-persist on the client) is a later client-side concern — the
+ * server's responsibility here is the entitlement gate + the per-buyer watermark.
+ */
+async function licensedPackageHandler(
+  request: CoreRequest,
+  adminRepository: AdminRepository,
+  repo: EntitlementRepository,
+  objectStore: ObjectStore | undefined,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const kitId = request.pathParameters?.kitId;
+  if (!kitId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing kitId' });
+  }
+  const parsed = licensedPackageRequestSchema.safeParse(parseJsonBody(request));
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid licensed-package payload' });
+  }
+  const { userId } = parsed.data;
+
+  const entitlement = await repo.getEntitlement(userId, kitId);
+  if (!entitlement || !isEntitlementActive(entitlement)) {
+    return json(request, allowedOrigins, 403, {
+      message: 'No active entitlement for this user and kit',
+    });
+  }
+
+  const kit = await adminRepository.getKit(kitId);
+  if (!kit || !isPublicKit(kit)) {
+    return json(request, allowedOrigins, 404, { message: 'Kit not found' });
+  }
+  if (!kit.currentVersion) {
+    return json(request, allowedOrigins, 409, { message: 'Kit has no current version' });
+  }
+
+  const version = await adminRepository.getKitVersion(kit.kitId, kit.currentVersion);
+  if (!version?.packageS3Key) {
+    return json(request, allowedOrigins, 409, { message: 'Kit package is not available' });
+  }
+
+  if (!objectStore) {
+    return json(request, allowedOrigins, 500, { message: 'Object store is not configured' });
+  }
+
+  // Read the current package bytes, inject the per-buyer watermark license file,
+  // and return the watermarked archive. The watermark is deterministic per
+  // entitlement (stable entitlementId + grantedAt) so re-fetches match.
+  const licenseText = effectiveLicenseText(kit);
+  const watermark = buildWatermark(entitlement);
+  const licenseFile = buildLicenseFileContent(licenseText, watermark);
+
+  const original = await collectStream(await objectStore.readStream(version.packageS3Key));
+  const watermarked = injectFileIntoZip(original, '.agentkit-license/LICENSE.txt', licenseFile);
+  const sha256 = createHashHex(watermarked);
+
+  return json(request, allowedOrigins, 200, {
+    kitId,
+    userId,
+    entitlementId: entitlement.entitlementId,
+    fileName: version.packageFileName ?? safeDownloadFileName(kit.slug, version.version),
+    contentBase64: watermarked.toString('base64'),
+    sha256,
+    licenseVersion: entitlement.licenseVersion,
+    watermark,
   });
 }
 

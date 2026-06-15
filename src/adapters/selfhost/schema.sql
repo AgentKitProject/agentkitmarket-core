@@ -34,6 +34,16 @@ CREATE TABLE IF NOT EXISTS kits (
   -- Org ownership + private-catalog visibility (Market Phase 2).
   owner_org_id        text,
   visibility          text,
+  -- Tier-2 paid/licensed-kit metadata. All nullable; absent = free behavior.
+  pricing             text,
+  price_model         text,
+  price_cents         bigint,
+  currency            text,
+  interval            text,
+  downloadable        boolean,
+  license_type        text,
+  license_text        text,
+  license_version     text,
   -- nested / flexible fields
   publisher           jsonb,
   categories          jsonb,
@@ -145,6 +155,17 @@ ALTER TABLE kits ADD COLUMN IF NOT EXISTS owner_org_id text;
 ALTER TABLE kits ADD COLUMN IF NOT EXISTS visibility text;
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS owner_org_id text;
 
+-- Tier-2 paid/licensed-kit columns (upgrade-safe).
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS pricing text;
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS price_model text;
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS price_cents bigint;
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS currency text;
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS interval text;
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS downloadable boolean;
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS license_type text;
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS license_text text;
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS license_version text;
+
 -- Index for the private-catalog "list this org's kits" query.
 CREATE INDEX IF NOT EXISTS kits_owner_org_id_idx ON kits (owner_org_id);
 
@@ -193,3 +214,25 @@ CREATE TABLE IF NOT EXISTS org_invites (
 
 -- Dynamo OrgInvites had a userId-index GSI.
 CREATE INDEX IF NOT EXISTS org_invites_user_id_idx ON org_invites (user_id);
+
+-- === Entitlements (Tier-2 paid/licensed kits) =================================
+-- Dynamo EntitlementsTable: PK userId / SK kitId (hot path "does U hold K"),
+-- GSI kitId-index (seller/admin analytics). Mirrored here as PK (user_id, kit_id)
+-- + index on kit_id.
+
+CREATE TABLE IF NOT EXISTS entitlements (
+  entitlement_id        text NOT NULL,
+  kit_id                text NOT NULL,
+  user_id               text NOT NULL,
+  status                text NOT NULL,
+  source                text NOT NULL,
+  license_version       text NOT NULL,
+  license_accepted_at   text NOT NULL,
+  license_text_snapshot text NOT NULL,
+  granted_at            text NOT NULL,
+  expires_at            text,
+  stripe_subscription_id text,
+  PRIMARY KEY (user_id, kit_id)
+);
+
+CREATE INDEX IF NOT EXISTS entitlements_kit_id_idx ON entitlements (kit_id);

@@ -11,6 +11,8 @@
 import type {
   AdminRepository,
   CatalogRepository,
+  EntitlementRepository,
+  ObjectStore,
   OrgRepository,
   PackageUploadService,
 } from '../ports.js';
@@ -44,7 +46,11 @@ export interface RouterDeps {
   repository: CatalogRepository;
   adminRepository?: AdminRepository;
   orgRepository?: OrgRepository;
+  /** Tier-2 buyer entitlements (paid kits). */
+  entitlementRepository?: EntitlementRepository;
   packageUploadService?: PackageUploadService;
+  /** Object store for reading kit packages (Tier-2 watermarked licensed-package fetch). */
+  objectStore?: ObjectStore;
   allowedOrigins?: string[];
   adminKey?: string;
 }

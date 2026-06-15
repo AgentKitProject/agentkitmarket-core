@@ -21,9 +21,15 @@ import type {
   CatalogDetail,
   CreateSubmissionInput,
   CreateSubmissionResult,
+  Entitlement,
+  GrantEntitlementInput,
   KitRecord,
   KitVersionRecord,
   KitVisibility,
+  KitPricing,
+  PriceModel,
+  PriceInterval,
+  LicenseType,
   Organization,
   OrgInvite,
   OrgMembership,
@@ -62,6 +68,12 @@ export interface AdminRepository {
   removeKit(kitId: string, removedAt: string): Promise<KitRecord | undefined>;
   getKit(kitId: string): Promise<KitRecord | undefined>;
   getKitBySlug(slug: string): Promise<KitRecord | undefined>;
+  /**
+   * Sets Tier-2 pricing/license metadata on a kit. Caller enforces role gates +
+   * validation (paid requires priceCents>0 + priceModel; subscription requires
+   * interval); the repository persists the resolved fields and returns the kit.
+   */
+  setKitPricing(kitId: string, pricing: KitPricingUpdate): Promise<KitRecord | undefined>;
   getKitVersion(kitId: string, version: string): Promise<KitVersionRecord | undefined>;
   listKitVersions(kitId: string): Promise<KitVersionRecord[]>;
   findKitVersionBySha256(sha256: string): Promise<KitVersionRecord | undefined>;
@@ -112,6 +124,42 @@ export interface OrgRepository {
   setKitVisibility(kitId: string, visibility: KitVisibility): Promise<KitRecord | undefined>;
   /** All kits owned by an org, including private ones (for the org's own listing). */
   listKitsForOrg(orgId: string): Promise<KitRecord[]>;
+}
+
+/**
+ * Resolved Tier-2 pricing/license fields to persist on a kit. The route layer
+ * resolves licenseVersion (default-license version when licenseType==='default')
+ * and the downloadable default (paid → false, free → true) before calling the
+ * repository, so adapters just write what they are given.
+ */
+export interface KitPricingUpdate {
+  pricing: KitPricing;
+  priceModel?: PriceModel;
+  priceCents?: number;
+  currency: string;
+  interval?: PriceInterval;
+  downloadable: boolean;
+  licenseType: LicenseType;
+  licenseText?: string;
+  licenseVersion: string;
+}
+
+/**
+ * Buyer entitlements for paid (and explicitly-granted free) kits.
+ *
+ * Hot path is `getEntitlement(userId, kitId)` ("does U hold K?"). Both the AWS
+ * (DynamoDB: PK userId / SK kitId, GSI kitId-index) and self-host (Postgres: PK
+ * (user_id, kit_id) + index on kit_id) adapters implement this identically; the
+ * dual-backend contract suite enforces parity.
+ */
+export interface EntitlementRepository {
+  /** Idempotent on (userId, kitId): re-granting updates the existing row to active. */
+  grantEntitlement(input: GrantEntitlementInput): Promise<Entitlement>;
+  getEntitlement(userId: string, kitId: string): Promise<Entitlement | undefined>;
+  listEntitlementsForUser(userId: string): Promise<Entitlement[]>;
+  /** Flips an active entitlement to `revoked`; returns the updated row or undefined. */
+  revokeEntitlement(userId: string, kitId: string): Promise<Entitlement | undefined>;
+  listEntitlementsForKit(kitId: string): Promise<Entitlement[]>;
 }
 
 /** Fields the validation worker writes to a ValidationJob row. */

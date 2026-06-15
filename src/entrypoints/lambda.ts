@@ -21,12 +21,15 @@ import type {
 import type {
   AdminRepository,
   CatalogRepository,
+  EntitlementRepository,
+  KitPricingUpdate,
+  ObjectStore,
   OrgRepository,
   PackageUploadService,
   SubmissionValidationUpdate,
   ValidationJobUpdate,
 } from '../core/ports.js';
-import type { CatalogDetail, CatalogPage, CreateSubmissionInput, CreateSubmissionResult, KitRecord, KitVersionRecord, SubmissionRecord, ValidationJobRecord } from '../core/types.js';
+import type { CatalogDetail, CatalogPage, CreateSubmissionInput, CreateSubmissionResult, Entitlement, GrantEntitlementInput, KitRecord, KitVersionRecord, SubmissionRecord, ValidationJobRecord } from '../core/types.js';
 import { routeRequest } from '../core/routes/index.js';
 import { matchRoute } from './route-table.js';
 import type { CoreRequest } from '../core/routes/types.js';
@@ -34,7 +37,9 @@ import {
   createAwsPackageUploadService,
   createDynamoAdminRepository,
   createDynamoCatalogRepository,
+  createDynamoEntitlementRepository,
   createDynamoOrgRepository,
+  createS3ObjectStore,
 } from '../adapters/aws/index.js';
 
 // Re-exported for parity with the original handler module surface (consumed by
@@ -45,7 +50,9 @@ interface HandlerOptions {
   repository: CatalogRepository;
   adminRepository?: AdminRepository;
   orgRepository?: OrgRepository;
+  entitlementRepository?: EntitlementRepository;
   packageUploadService?: PackageUploadService;
+  objectStore?: ObjectStore;
   allowedOrigins?: string[];
   adminKey?: string;
 }
@@ -54,7 +61,9 @@ export const handler = createHandler({
   repository: createLazyDynamoCatalogRepository(),
   adminRepository: createLazyDynamoAdminRepository(),
   orgRepository: createLazyDynamoOrgRepository(),
+  entitlementRepository: createLazyDynamoEntitlementRepository(),
   packageUploadService: createLazyAwsPackageUploadService(),
+  objectStore: createLazyS3ObjectStore(),
 });
 
 export function createHandler(options: HandlerOptions) {
@@ -69,13 +78,17 @@ export function createHandler(options: HandlerOptions) {
     // route actually invokes a method.
     const adminRepository = options.adminRepository ?? createLazyDynamoAdminRepository();
     const orgRepository = options.orgRepository ?? createLazyDynamoOrgRepository();
+    const entitlementRepository = options.entitlementRepository ?? createLazyDynamoEntitlementRepository();
     const packageUploadService = options.packageUploadService ?? createLazyAwsPackageUploadService();
+    const objectStore = options.objectStore ?? createLazyS3ObjectStore();
 
     const response = await routeRequest(toCoreRequest(event), {
       repository: options.repository,
       adminRepository,
       orgRepository,
+      entitlementRepository,
       packageUploadService,
+      objectStore,
       allowedOrigins,
       adminKey,
     });
@@ -144,6 +157,18 @@ function orgConfigFromEnv() {
     orgMembershipsTableName: requiredEnv('ORG_MEMBERSHIPS_TABLE_NAME'),
     orgInvitesTableName: requiredEnv('ORG_INVITES_TABLE_NAME'),
     kitsTableName: requiredEnv('KITS_TABLE_NAME'),
+  };
+}
+
+function entitlementConfigFromEnv() {
+  return {
+    entitlementsTableName: requiredEnv('ENTITLEMENTS_TABLE_NAME'),
+  };
+}
+
+function objectStoreConfigFromEnv() {
+  return {
+    packageBucketName: requiredEnv('PACKAGE_BUCKET_NAME'),
   };
 }
 
@@ -262,6 +287,10 @@ function createLazyDynamoAdminRepository(): AdminRepository {
       return getRepository().getKitBySlug(slug);
     },
 
+    setKitPricing(kitId: string, pricing: KitPricingUpdate): Promise<KitRecord | undefined> {
+      return getRepository().setKitPricing(kitId, pricing);
+    },
+
     getKitVersion(kitId: string, version: string): Promise<KitVersionRecord | undefined> {
       return getRepository().getKitVersion(kitId, version);
     },
@@ -312,6 +341,60 @@ function createLazyDynamoOrgRepository(): OrgRepository {
     setKitOwnerOrg(kitId, orgId) { return getRepository().setKitOwnerOrg(kitId, orgId); },
     setKitVisibility(kitId, visibility) { return getRepository().setKitVisibility(kitId, visibility); },
     listKitsForOrg(orgId) { return getRepository().listKitsForOrg(orgId); },
+  };
+}
+
+function createLazyDynamoEntitlementRepository(): EntitlementRepository {
+  let repository: EntitlementRepository | undefined;
+
+  const getRepository = (): EntitlementRepository => {
+    repository ??= createDynamoEntitlementRepository(entitlementConfigFromEnv());
+    return repository;
+  };
+
+  return {
+    grantEntitlement(input: GrantEntitlementInput): Promise<Entitlement> {
+      return getRepository().grantEntitlement(input);
+    },
+    getEntitlement(userId: string, kitId: string): Promise<Entitlement | undefined> {
+      return getRepository().getEntitlement(userId, kitId);
+    },
+    listEntitlementsForUser(userId: string): Promise<Entitlement[]> {
+      return getRepository().listEntitlementsForUser(userId);
+    },
+    revokeEntitlement(userId: string, kitId: string): Promise<Entitlement | undefined> {
+      return getRepository().revokeEntitlement(userId, kitId);
+    },
+    listEntitlementsForKit(kitId: string): Promise<Entitlement[]> {
+      return getRepository().listEntitlementsForKit(kitId);
+    },
+  };
+}
+
+function createLazyS3ObjectStore(): ObjectStore {
+  let store: ObjectStore | undefined;
+
+  const getStore = (): ObjectStore => {
+    store ??= createS3ObjectStore(objectStoreConfigFromEnv());
+    return store;
+  };
+
+  return {
+    ensureBucket(): Promise<void> {
+      return getStore().ensureBucket();
+    },
+    createUploadUrl(key: string): Promise<string> {
+      return getStore().createUploadUrl(key);
+    },
+    createDownloadUrl(key: string): Promise<string> {
+      return getStore().createDownloadUrl(key);
+    },
+    exists(key: string): Promise<boolean> {
+      return getStore().exists(key);
+    },
+    readStream(key: string): Promise<AsyncIterable<Uint8Array>> {
+      return getStore().readStream(key);
+    },
   };
 }
 

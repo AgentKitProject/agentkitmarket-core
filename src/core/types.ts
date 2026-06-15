@@ -20,6 +20,57 @@ export type OrgType = 'personal' | 'team';
 /** Kit visibility. Mirrors `KitVisibility` in @agentkitforge/contracts. */
 export type KitVisibility = 'public' | 'private';
 
+/** Whether a kit is free or paid (Tier-2). Mirrors `KitPricing` in @agentkitforge/contracts. */
+export type KitPricing = 'free' | 'paid';
+
+/** Pricing model for a paid kit. Mirrors `PriceModel` in @agentkitforge/contracts. */
+export type PriceModel = 'one_time' | 'subscription';
+
+/** Billing interval for a subscription kit. Mirrors `PriceInterval` in @agentkitforge/contracts. */
+export type PriceInterval = 'month' | 'year';
+
+/** Which license applies to a kit. Mirrors `LicenseType` in @agentkitforge/contracts. */
+export type LicenseType = 'default' | 'custom';
+
+/** Entitlement lifecycle. Mirrors `EntitlementStatus` in @agentkitforge/contracts. */
+export type EntitlementStatus = 'active' | 'revoked' | 'expired';
+
+/** How an entitlement was acquired. Mirrors `EntitlementSource` in @agentkitforge/contracts. */
+export type EntitlementSource = 'purchase' | 'admin_grant' | 'free';
+
+/**
+ * A buyer's right to use a specific paid (or free, when explicitly granted) kit.
+ * Mirrors `Entitlement` in @agentkitforge/contracts. The license text the buyer
+ * accepted is snapshotted so a later license change does not rewrite history.
+ */
+export interface Entitlement {
+  entitlementId: string;
+  kitId: string;
+  userId: string;
+  status: EntitlementStatus;
+  source: EntitlementSource;
+  licenseVersion: string;
+  licenseAcceptedAt: string;
+  licenseTextSnapshot: string;
+  grantedAt: string;
+  /** For subscriptions; absent for one-time/free. */
+  expiresAt?: string;
+  /** Nullable; populated by the Phase B Stripe webhook. Never read in core. */
+  stripeSubscriptionId?: string | null;
+}
+
+/** Input to grant (or idempotently re-grant) an entitlement. */
+export interface GrantEntitlementInput {
+  kitId: string;
+  userId: string;
+  source: EntitlementSource;
+  licenseVersion: string;
+  licenseAcceptedAt: string;
+  licenseTextSnapshot: string;
+  expiresAt?: string;
+  stripeSubscriptionId?: string | null;
+}
+
 /** An organization that can own kits. Mirrors `Organization` in @agentkitforge/contracts. */
 export interface Organization {
   orgId: string;
@@ -104,6 +155,21 @@ export interface KitRecord {
   ownerOrgId?: string;
   /** Catalog visibility; `private` kits are excluded from the public catalog. Defaults to `public` when absent. */
   visibility?: KitVisibility;
+  /** Tier-2 pricing/license metadata. All optional; absent = free, default license, downloadable. */
+  pricing?: KitPricing;
+  priceModel?: PriceModel;
+  /** USD minor units (cents). */
+  priceCents?: number;
+  /** v1 is USD-only; the field is still stored. */
+  currency?: string;
+  interval?: PriceInterval;
+  /** Paid kits default false (online-only); free kits are treated as downloadable. */
+  downloadable?: boolean;
+  licenseType?: LicenseType;
+  /** Custom license body, used when licenseType === 'custom'. */
+  licenseText?: string;
+  /** The default-license version applied (e.g. 'default-v1'). */
+  licenseVersion?: string;
   publisher?: unknown;
   status: string;
   validationStatus: string;
