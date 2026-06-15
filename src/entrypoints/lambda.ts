@@ -22,6 +22,8 @@ import type {
   AdminRepository,
   CatalogRepository,
   PackageUploadService,
+  SubmissionValidationUpdate,
+  ValidationJobUpdate,
 } from '../core/ports.js';
 import type { CatalogDetail, CatalogPage, CreateSubmissionInput, CreateSubmissionResult, KitRecord, KitVersionRecord, SubmissionRecord, ValidationJobRecord } from '../core/types.js';
 import { routeRequest } from '../core/routes/index.js';
@@ -229,6 +231,14 @@ function createLazyDynamoAdminRepository(): AdminRepository {
 
     incrementKitDownloads(kitId: string): Promise<void> {
       return getRepository().incrementKitDownloads(kitId);
+    },
+
+    updateValidationJob(jobId: string, update: ValidationJobUpdate): Promise<void> {
+      return getRepository().updateValidationJob(jobId, update);
+    },
+
+    updateSubmissionValidationResult(submissionId: string, update: SubmissionValidationUpdate): Promise<void> {
+      return getRepository().updateSubmissionValidationResult(submissionId, update);
     },
   };
 }

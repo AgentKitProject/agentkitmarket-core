@@ -61,6 +61,34 @@ export interface AdminRepository {
   listKitVersions(kitId: string): Promise<KitVersionRecord[]>;
   findKitVersionBySha256(sha256: string): Promise<KitVersionRecord | undefined>;
   incrementKitDownloads(kitId: string): Promise<void>;
+  /**
+   * Validation-worker writes. Mirror the fields the infra validation worker set
+   * via direct DynamoDB UpdateItem so the worker writes through the port instead
+   * of a cloud SDK. Implemented by both the AWS (DynamoDB) and self-host
+   * (Postgres) adapters.
+   */
+  updateValidationJob(jobId: string, update: ValidationJobUpdate): Promise<void>;
+  updateSubmissionValidationResult(submissionId: string, update: SubmissionValidationUpdate): Promise<void>;
+}
+
+/** Fields the validation worker writes to a ValidationJob row. */
+export interface ValidationJobUpdate {
+  status: string;
+  updatedAt: string;
+  result?: unknown;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+/** Fields the validation worker writes to a Submission row on completion. */
+export interface SubmissionValidationUpdate {
+  status: string;
+  validationStatus: string;
+  validationSummary: unknown;
+  updatedAt: string;
+  packageSizeBytes?: number;
+  sha256?: string;
+  contentType?: string;
 }
 
 /**

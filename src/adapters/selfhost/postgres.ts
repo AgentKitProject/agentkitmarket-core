@@ -20,6 +20,8 @@ import { randomUUID } from 'node:crypto';
 import type {
   AdminRepository,
   CatalogRepository,
+  SubmissionValidationUpdate,
+  ValidationJobUpdate,
 } from '../../core/ports.js';
 import type {
   CatalogDetail,
@@ -615,7 +617,59 @@ export function createPostgresAdminRepository(pool: PgPool): AdminRepository {
         [kitId, new Date().toISOString()],
       );
     },
+
+    async updateValidationJob(jobId: string, update: ValidationJobUpdate): Promise<void> {
+      // Only set columns that are present, mirroring the AWS adapter (undefined
+      // fields left unchanged). `result` maps to the jsonb `result` column.
+      await dynamicUpdate(pool, 'validation_jobs', 'job_id', jobId, [
+        ['status', update.status],
+        ['result', update.result === undefined ? undefined : jb(update.result)],
+        ['started_at', update.startedAt],
+        ['completed_at', update.completedAt],
+        ['updated_at', update.updatedAt],
+      ]);
+    },
+
+    async updateSubmissionValidationResult(
+      submissionId: string,
+      update: SubmissionValidationUpdate,
+    ): Promise<void> {
+      await dynamicUpdate(pool, 'submissions', 'submission_id', submissionId, [
+        ['status', update.status],
+        ['validation_status', update.validationStatus],
+        ['validation_summary', update.validationSummary === undefined ? undefined : jb(update.validationSummary)],
+        ['package_size_bytes', update.packageSizeBytes],
+        ['sha256', update.sha256],
+        ['content_type', update.contentType],
+        ['updated_at', update.updatedAt],
+      ]);
+    },
   };
+}
+
+/**
+ * Builds and runs `UPDATE <table> SET col = $n, ... WHERE <keyColumn> = $1`,
+ * skipping any column whose value is `undefined`. Mirrors the AWS validation
+ * worker's dynamic update (undefined-valued fields are left unchanged).
+ */
+async function dynamicUpdate(
+  pool: PgQueryable,
+  table: string,
+  keyColumn: string,
+  keyValue: string,
+  columns: Array<[string, unknown]>,
+): Promise<void> {
+  const present = columns.filter(([, value]) => value !== undefined);
+  if (present.length === 0) {
+    return;
+  }
+
+  const setClauses = present.map(([col], index) => `${col} = $${index + 2}`);
+  const values = present.map(([, value]) => value);
+  await pool.query(
+    `UPDATE ${table} SET ${setClauses.join(', ')} WHERE ${keyColumn} = $1`,
+    [keyValue, ...values],
+  );
 }
 
 // --- write helpers --------------------------------------------------------------

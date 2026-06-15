@@ -15,7 +15,15 @@ export type {
   ObjectStore,
   MessageQueue,
   ValidationJobMessage,
+  ValidationJobUpdate,
+  SubmissionValidationUpdate,
 } from "./core/ports.js";
+
+// Config + validation service (cloud-free) — usable by both runtimes.
+export { EnvConfigProvider, loadSelfHostConfig } from "./core/config.js";
+export type { SelfHostConfig, SelfHostObjectStoreConfig } from "./core/config.js";
+export { runValidationJob } from "./core/services/validation.js";
+export type { ValidationSummary, RunValidationDeps } from "./core/services/validation.js";
 
 // Domain services (pure shaping + state-machine helpers) and the
 // runtime-agnostic router. Entrypoints remain exposed only via the package

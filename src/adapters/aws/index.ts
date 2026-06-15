@@ -28,7 +28,10 @@ import { randomUUID } from 'node:crypto';
 import type {
   AdminRepository,
   CatalogRepository,
+  ObjectStore,
   PackageUploadService,
+  SubmissionValidationUpdate,
+  ValidationJobUpdate,
 } from '../../core/ports.js';
 import type {
   CatalogDetail,
@@ -597,7 +600,54 @@ export function createDynamoAdminRepository(config: DynamoAdminConfig): AdminRep
         },
       }));
     },
+
+    async updateValidationJob(jobId: string, update: ValidationJobUpdate): Promise<void> {
+      await updateDynamoItem(dynamo, validationJobsTableName, { jobId }, {
+        status: update.status,
+        result: update.result,
+        startedAt: update.startedAt,
+        completedAt: update.completedAt,
+        updatedAt: update.updatedAt,
+      });
+    },
+
+    async updateSubmissionValidationResult(submissionId: string, update: SubmissionValidationUpdate): Promise<void> {
+      await updateDynamoItem(dynamo, submissionsTableName, { submissionId }, {
+        status: update.status,
+        validationStatus: update.validationStatus,
+        validationSummary: update.validationSummary,
+        packageSizeBytes: update.packageSizeBytes,
+        sha256: update.sha256,
+        contentType: update.contentType,
+        updatedAt: update.updatedAt,
+      });
+    },
   };
+}
+
+/**
+ * Dynamic SET update mirroring the infra validation worker's `updateItem`:
+ * builds `SET #k = :k` for each entry. Undefined-valued keys are dropped so the
+ * expression matches the worker (which relied on `removeUndefinedValues`).
+ */
+async function updateDynamoItem(
+  dynamo: DynamoDBDocumentClient,
+  tableName: string,
+  key: Record<string, string>,
+  values: Record<string, unknown>,
+): Promise<void> {
+  const entries = Object.entries(values).filter(([, value]) => value !== undefined);
+  if (entries.length === 0) {
+    return;
+  }
+
+  await dynamo.send(new UpdateCommand({
+    TableName: tableName,
+    Key: key,
+    UpdateExpression: `SET ${entries.map(([name]) => `#${name} = :${name}`).join(', ')}`,
+    ExpressionAttributeNames: Object.fromEntries(entries.map(([name]) => [`#${name}`, name])),
+    ExpressionAttributeValues: Object.fromEntries(entries.map(([name, value]) => [`:${name}`, value])),
+  }));
 }
 
 export function createAwsPackageUploadService(config: AwsPackageUploadConfig): PackageUploadService {
@@ -648,6 +698,58 @@ export function createAwsPackageUploadService(config: AwsPackageUploadConfig): P
           packageS3Key: job.packageS3Key,
         }),
       }));
+    },
+  };
+}
+
+/** Config for the S3 object store used by the hosted validation worker. */
+export interface S3ObjectStoreConfig {
+  packageBucketName: string;
+}
+
+/**
+ * S3-backed ObjectStore for the hosted validation worker. `readStream` yields the
+ * GetObject body as an AsyncIterable<Uint8Array>, matching the self-host MinIO
+ * adapter so `runValidationJob` is identical across runtimes. The upload/download
+ * presign + exists methods reuse the same params as the package upload service.
+ */
+export function createS3ObjectStore(config: S3ObjectStoreConfig): ObjectStore {
+  const { packageBucketName } = config;
+  const s3 = new S3Client({});
+
+  return {
+    createUploadUrl(key: string): Promise<string> {
+      return getSignedUrl(s3, new PutObjectCommand({
+        Bucket: packageBucketName,
+        Key: key,
+        ContentType: 'application/zip',
+      }), { expiresIn: UPLOAD_URL_EXPIRES_IN_SECONDS });
+    },
+
+    createDownloadUrl(key: string): Promise<string> {
+      return getSignedUrl(s3, new GetObjectCommand({
+        Bucket: packageBucketName,
+        Key: key,
+      }), { expiresIn: DOWNLOAD_URL_EXPIRES_IN_SECONDS });
+    },
+
+    async exists(key: string): Promise<boolean> {
+      try {
+        await s3.send(new HeadObjectCommand({ Bucket: packageBucketName, Key: key }));
+        return true;
+      } catch (error) {
+        console.warn('Package object lookup failed', { key, error });
+        return false;
+      }
+    },
+
+    async readStream(key: string): Promise<AsyncIterable<Uint8Array>> {
+      const result = await s3.send(new GetObjectCommand({ Bucket: packageBucketName, Key: key }));
+      const body = result.Body as unknown;
+      if (!body) {
+        throw new Error(`Object not found: ${key}`);
+      }
+      return body as AsyncIterable<Uint8Array>;
     },
   };
 }

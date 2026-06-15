@@ -14,6 +14,10 @@
       "types": "./dist/entrypoints/lambda.d.ts",
       "default": "./dist/entrypoints/lambda.js"
     },
+    "./entrypoints/lambda-worker": {
+      "types": "./dist/entrypoints/lambda-worker.d.ts",
+      "default": "./dist/entrypoints/lambda-worker.js"
+    },
     "./entrypoints/server": {
       "types": "./dist/entrypoints/server.d.ts",
       "default": "./dist/entrypoints/server.js"
