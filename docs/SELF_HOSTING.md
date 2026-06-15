@@ -130,12 +130,40 @@ helm upgrade market charts/agentkitmarket \
   -f secrets.yaml
 ```
 
+## Web UI (the full self-host)
+
+The chart also deploys the **web app** (`agentkitmarket-app`, the Next.js UI),
+gated by `web.enabled` (default `true`). It is one runtime-configured image —
+its server reads the backend URL + WorkOS/admin config from env at request time
+(nothing baked at build), so a single image works anywhere.
+
+- The web app's backend URL defaults to the in-cluster API Service
+  (`http://<release>-api`) — no rebuild needed. Override with `web.config.apiBaseUrl`.
+- **Public catalog browse/detail works with no login.** Auth (WorkOS) only gates
+  admin/submit; self-hosters bring their own WorkOS via `web.secrets.*` (or
+  `web.secrets.existingSecret`). Without WorkOS configured, the UI still serves
+  the public catalog.
+- Expose the **web** app (not the API) externally — the API can stay internal;
+  the web server calls it in-cluster. Set `web.ingress.*` (e.g. tailscale).
+
+## GitOps with an external secret (recommended)
+
+To keep secrets out of git, set `secrets.existingSecret` to a Secret you manage
+externally (e.g. synced by Infisical, Sealed Secrets, or External Secrets). When
+set, the chart does **not** create its own secret, the API/worker `envFrom` it,
+and the bundled Postgres/MinIO read their passwords from it. The Secret must
+provide: `ADMIN_API_KEY`, `DATABASE_URL`, `S3_ENDPOINT`, `PACKAGE_BUCKET_NAME`,
+`S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `REDIS_URL`, and (if using bundled
+data services) `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`. Ensure
+`minio.rootUser` equals `S3_ACCESS_KEY_ID`.
+
 ## Notes
 
-- The API server runs `schema.sql` via `CREATE TABLE IF NOT EXISTS` on every
-  startup, so it is safe to run with zero downtime rolling deploys.
+- The API server runs `schema.sql` on startup, guarded by a Postgres advisory
+  lock so multiple replicas don't race; safe for zero-downtime rolling deploys.
+- The self-host server auto-creates the object-store bucket on startup
+  (`ObjectStore.ensureBucket()`).
 - The worker and API server share all env vars. Only the API server exposes a
   port.
-- The web app (`agentkitmarket-app`) connects to this backend via
-  `NEXT_PUBLIC_AGENTKITMARKET_API_BASE_URL` and `AGENTKITMARKET_ADMIN_KEY`.
-  The admin key is the same value as `ADMIN_API_KEY` set above.
+- The web app connects to this backend server-side via its runtime backend URL +
+  `AGENTKITMARKET_ADMIN_KEY` (= the backend's `ADMIN_API_KEY`).
