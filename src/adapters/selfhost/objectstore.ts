@@ -1,0 +1,89 @@
+/**
+ * MinIO object store adapter (self-host deployment).
+ *
+ * MinIO is S3-compatible, so this reuses the same `@aws-sdk/client-s3` +
+ * `@aws-sdk/s3-request-presigner` already depended on by the AWS adapter. The
+ * only differences are an explicit `endpoint` (the MinIO URL) and
+ * `forcePathStyle: true` (MinIO serves buckets path-style, not vhost-style).
+ *
+ * Presign expiries and the upload content-type are kept IDENTICAL to the AWS S3
+ * code so the two deployments behave the same.
+ */
+
+import {
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { ObjectStore } from '../../core/ports.js';
+import {
+  DOWNLOAD_URL_EXPIRES_IN_SECONDS,
+  UPLOAD_URL_EXPIRES_IN_SECONDS,
+} from '../../core/services/constants.js';
+
+export interface MinioObjectStoreConfig {
+  /** MinIO endpoint, e.g. `http://minio:9000`. */
+  endpoint: string;
+  bucket: string;
+  region?: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  /** Path-style addressing; required for MinIO. Defaults to true. */
+  forcePathStyle?: boolean;
+}
+
+export function createMinioObjectStore(config: MinioObjectStoreConfig): ObjectStore {
+  const bucket = config.bucket;
+  const s3 = new S3Client({
+    endpoint: config.endpoint,
+    region: config.region ?? 'us-east-1',
+    forcePathStyle: config.forcePathStyle ?? true,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+  });
+
+  return {
+    createUploadUrl(key: string): Promise<string> {
+      return getSignedUrl(s3, new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: 'application/zip',
+      }), {
+        expiresIn: UPLOAD_URL_EXPIRES_IN_SECONDS,
+      });
+    },
+
+    createDownloadUrl(key: string): Promise<string> {
+      return getSignedUrl(s3, new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      }), {
+        expiresIn: DOWNLOAD_URL_EXPIRES_IN_SECONDS,
+      });
+    },
+
+    async exists(key: string): Promise<boolean> {
+      try {
+        await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+        return true;
+      } catch (error) {
+        console.warn('Package object lookup failed', { key, error });
+        return false;
+      }
+    },
+
+    async readStream(key: string): Promise<AsyncIterable<Uint8Array>> {
+      const result = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      const body = result.Body;
+      if (!body) {
+        throw new Error(`Object not found: ${key}`);
+      }
+      // The SDK Node stream is an AsyncIterable<Uint8Array>.
+      return body as AsyncIterable<Uint8Array>;
+    },
+  };
+}
