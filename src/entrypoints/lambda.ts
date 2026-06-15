@@ -28,6 +28,7 @@ import type {
 } from '../core/ports.js';
 import type { CatalogDetail, CatalogPage, CreateSubmissionInput, CreateSubmissionResult, KitRecord, KitVersionRecord, SubmissionRecord, ValidationJobRecord } from '../core/types.js';
 import { routeRequest } from '../core/routes/index.js';
+import { matchRoute } from './route-table.js';
 import type { CoreRequest } from '../core/routes/types.js';
 import {
   createAwsPackageUploadService,
@@ -88,6 +89,35 @@ export function createHandler(options: HandlerOptions) {
 }
 
 function toCoreRequest(event: APIGatewayProxyEvent): CoreRequest {
+  // Behind a `{proxy+}` greedy integration `event.resource` is `/{proxy+}` and
+  // the real request path lives in `event.path` (or requestContext.path / the
+  // HTTP-API `rawPath`). Derive the router's resource template + pathParameters
+  // from that path via the same matcher the self-host server uses for ALL routes.
+  //
+  // Compatibility: the existing infra api-handler tests construct events with a
+  // concrete `event.resource` template (and `event.pathParameters`) but no
+  // `event.path`. When no usable path is present, fall back to the original
+  // `event.resource`/`event.pathParameters` behavior so those tests still pass.
+  const rawEvent = event as APIGatewayProxyEvent & {
+    requestContext?: { path?: string };
+    rawPath?: string;
+  };
+  const path =
+    event.path ?? rawEvent.requestContext?.path ?? rawEvent.rawPath ?? undefined;
+
+  if (path) {
+    const matched = matchRoute(event.httpMethod, path);
+    return {
+      method: event.httpMethod,
+      resource: matched.resource,
+      pathParameters: matched.pathParameters,
+      queryStringParameters: event.queryStringParameters,
+      headers: event.headers ?? {},
+      body: event.body,
+      isBase64Encoded: event.isBase64Encoded,
+    };
+  }
+
   return {
     method: event.httpMethod,
     resource: event.resource,
