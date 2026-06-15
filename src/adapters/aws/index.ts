@@ -923,6 +923,35 @@ export function createDynamoOrgRepository(config: DynamoOrgConfig): OrgRepositor
       await dynamo.send(new DeleteCommand({ TableName: orgInvitesTableName, Key: { orgId, userId } }));
     },
 
+    async deleteOrg(orgId: string): Promise<void> {
+      // Delete all memberships for the org.
+      const members = await dynamo.send(new QueryCommand({
+        TableName: orgMembershipsTableName,
+        KeyConditionExpression: 'orgId = :orgId',
+        ExpressionAttributeValues: { ':orgId': orgId },
+      }));
+      for (const item of (members.Items ?? []).filter(isMembership)) {
+        await dynamo.send(new DeleteCommand({
+          TableName: orgMembershipsTableName,
+          Key: { orgId, userId: item.userId },
+        }));
+      }
+      // Delete all invites for the org.
+      const invites = await dynamo.send(new QueryCommand({
+        TableName: orgInvitesTableName,
+        KeyConditionExpression: 'orgId = :orgId',
+        ExpressionAttributeValues: { ':orgId': orgId },
+      }));
+      for (const item of (invites.Items ?? []).filter(isInvite)) {
+        await dynamo.send(new DeleteCommand({
+          TableName: orgInvitesTableName,
+          Key: { orgId, userId: item.userId },
+        }));
+      }
+      // Delete the org row.
+      await dynamo.send(new DeleteCommand({ TableName: organizationsTableName, Key: { orgId } }));
+    },
+
     async setKitOwnerOrg(kitId: string, orgId: string): Promise<KitRecord | undefined> {
       const existing = await dynamo.send(new GetCommand({ TableName: kitsTableName, Key: { kitId } }));
       if (!isKitRecord(existing.Item)) {

@@ -308,6 +308,7 @@ function createLazyDynamoOrgRepository(): OrgRepository {
     acceptInvite(orgId, userId) { return getRepository().acceptInvite(orgId, userId); },
     listInvitesForUser(userId) { return getRepository().listInvitesForUser(userId); },
     removeMember(orgId, userId) { return getRepository().removeMember(orgId, userId); },
+    deleteOrg(orgId) { return getRepository().deleteOrg(orgId); },
     setKitOwnerOrg(kitId, orgId) { return getRepository().setKitOwnerOrg(kitId, orgId); },
     setKitVisibility(kitId, visibility) { return getRepository().setKitVisibility(kitId, visibility); },
     listKitsForOrg(orgId) { return getRepository().listKitsForOrg(orgId); },

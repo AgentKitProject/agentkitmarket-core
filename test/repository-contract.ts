@@ -26,6 +26,8 @@ import {
   REVIEW_QUEUE_RETENTION_MS,
 } from '../src/core/services/constants.js';
 import { isHiddenFromDefaultReviewQueue } from '../src/core/services/index.js';
+import { routeRequest } from '../src/core/routes/index.js';
+import type { CoreRequest, RouterDeps } from '../src/core/routes/types.js';
 
 export interface ContractRepos {
   catalog: CatalogRepository;
@@ -588,6 +590,89 @@ export function runRepositoryContract(name: string, makeRepos: MakeRepos): void 
         const kitId = await publishKit(baseInput());
         const kit = await repos.admin.getKit(kitId);
         expect(kit?.visibility).toBe('public');
+      });
+
+      describe('deleteOrg', () => {
+        function adminRequest(orgId: string, body: Record<string, unknown>): CoreRequest {
+          return {
+            method: 'DELETE',
+            resource: '/admin/orgs/{orgId}',
+            pathParameters: { orgId },
+            queryStringParameters: null,
+            headers: { 'x-agentkitmarket-admin-key': 'test-admin-key' },
+            body: JSON.stringify(body),
+          };
+        }
+
+        function deps(): RouterDeps {
+          return {
+            repository: repos.catalog,
+            adminRepository: repos.admin,
+            orgRepository: repos.org,
+            adminKey: 'test-admin-key',
+          };
+        }
+
+        it('happy path: removes the org, its memberships, and its invites', async () => {
+          const created = await org().createOrg({ displayName: 'Delete Me', ownerUserId: 'u_owner' });
+          await org().addMember(created.orgId, 'u_member', 'member', 'u_owner');
+          await org().acceptInvite(created.orgId, 'u_member');
+          await org().addMember(created.orgId, 'u_pending', 'member', 'u_owner');
+
+          const res = await routeRequest(adminRequest(created.orgId, { actorUserId: 'u_owner' }), deps());
+          expect(res.statusCode).toBe(200);
+          expect(JSON.parse(res.body)).toEqual({ ok: true, orgId: created.orgId });
+
+          expect(await org().getOrg(created.orgId)).toBeUndefined();
+          expect(await org().listMembers(created.orgId)).toHaveLength(0);
+          expect(await org().getMembership(created.orgId, 'u_owner')).toBeUndefined();
+          expect(await org().getMembership(created.orgId, 'u_member')).toBeUndefined();
+          expect(await org().listInvitesForUser('u_pending')).toHaveLength(0);
+        });
+
+        it('refuses to delete a personal org', async () => {
+          const personal = await org().ensurePersonalOrg('u_solo', 'Solo Dev');
+          const res = await routeRequest(adminRequest(personal.orgId, { actorUserId: 'u_solo' }), deps());
+          expect(res.statusCode).toBe(409);
+          expect(JSON.parse(res.body).message).toMatch(/personal/i);
+          expect(await org().getOrg(personal.orgId)).toBeDefined();
+        });
+
+        it('refuses to delete an org that still owns kits', async () => {
+          const kitId = await publishKit(baseInput());
+          const target = await org().createOrg({ displayName: 'Owns Kits', ownerUserId: 'user_1' });
+          await org().setKitOwnerOrg(kitId, target.orgId);
+
+          const res = await routeRequest(adminRequest(target.orgId, { actorUserId: 'user_1' }), deps());
+          expect(res.statusCode).toBe(409);
+          expect(JSON.parse(res.body).message).toMatch(/kits/i);
+          expect(await org().getOrg(target.orgId)).toBeDefined();
+        });
+
+        it('refuses a non-owner/admin actor (member → 403)', async () => {
+          const created = await org().createOrg({ displayName: 'Guarded Org', ownerUserId: 'u_owner' });
+          await org().addMember(created.orgId, 'u_member', 'member', 'u_owner');
+          await org().acceptInvite(created.orgId, 'u_member');
+
+          const res = await routeRequest(adminRequest(created.orgId, { actorUserId: 'u_member' }), deps());
+          expect(res.statusCode).toBe(403);
+          expect(await org().getOrg(created.orgId)).toBeDefined();
+        });
+
+        it('allows an admin (non-owner) to delete', async () => {
+          const created = await org().createOrg({ displayName: 'Admin Deletes', ownerUserId: 'u_owner' });
+          await org().addMember(created.orgId, 'u_admin', 'admin', 'u_owner');
+          await org().acceptInvite(created.orgId, 'u_admin');
+
+          const res = await routeRequest(adminRequest(created.orgId, { actorUserId: 'u_admin' }), deps());
+          expect(res.statusCode).toBe(200);
+          expect(await org().getOrg(created.orgId)).toBeUndefined();
+        });
+
+        it('returns 404 for an unknown org', async () => {
+          const res = await routeRequest(adminRequest('org_nope', { actorUserId: 'u_owner' }), deps());
+          expect(res.statusCode).toBe(404);
+        });
       });
     });
   });

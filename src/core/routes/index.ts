@@ -201,6 +201,10 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
         return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => createOrgHandler(request, repo, allowedOrigins));
       }
 
+      if (request.method === 'DELETE' && request.resource === '/admin/orgs/{orgId}') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => deleteOrgHandler(request, adminRepository, repo, allowedOrigins));
+      }
+
       if (request.method === 'GET' && request.resource === '/admin/users/{userId}/orgs') {
         return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => listUserOrgsHandler(request, repo, allowedOrigins));
       }
@@ -1087,6 +1091,47 @@ async function removeMemberHandler(
 
   await orgRepository.removeMember(orgId, userId);
   return json(request, allowedOrigins, 200, { ok: true });
+}
+
+async function deleteOrgHandler(
+  request: CoreRequest,
+  adminRepository: AdminRepository,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const orgId = request.pathParameters?.orgId;
+  if (!orgId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing orgId' });
+  }
+  const body = parseJsonBody(request) as Record<string, unknown> | undefined;
+  const actorUserId = typeof body?.actorUserId === 'string' ? body.actorUserId : undefined;
+  if (!actorUserId) {
+    return json(request, allowedOrigins, 400, { message: 'actorUserId is required' });
+  }
+
+  const org = await orgRepository.getOrg(orgId);
+  if (!org) {
+    return json(request, allowedOrigins, 404, { message: 'Organization not found' });
+  }
+
+  const actorMembership = await orgRepository.getMembership(orgId, actorUserId);
+  if (!actorMembership || actorMembership.status !== 'active' || !MANAGE_ROLES.has(actorMembership.role)) {
+    return json(request, allowedOrigins, 403, { message: 'Only an owner or admin can delete an organization' });
+  }
+
+  if (org.type === 'personal') {
+    return json(request, allowedOrigins, 409, { message: 'Your personal organization cannot be deleted' });
+  }
+
+  const ownedKits = await orgRepository.listKitsForOrg(orgId);
+  if (ownedKits.length > 0) {
+    return json(request, allowedOrigins, 409, {
+      message: 'This organization still owns kits. Transfer or remove them before deleting the organization.',
+    });
+  }
+
+  await orgRepository.deleteOrg(orgId);
+  return json(request, allowedOrigins, 200, { ok: true, orgId });
 }
 
 async function listUserInvitesHandler(

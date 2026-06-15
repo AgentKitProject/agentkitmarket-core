@@ -106,6 +106,8 @@ export interface OrgRepository {
   acceptInvite(orgId: string, userId: string): Promise<OrgMembership | undefined>;
   listInvitesForUser(userId: string): Promise<OrgInvite[]>;
   removeMember(orgId: string, userId: string): Promise<void>;
+  /** Hard-deletes an org and all its memberships + invites. Caller enforces guards. */
+  deleteOrg(orgId: string): Promise<void>;
   setKitOwnerOrg(kitId: string, orgId: string): Promise<KitRecord | undefined>;
   setKitVisibility(kitId: string, visibility: KitVisibility): Promise<KitRecord | undefined>;
   /** All kits owned by an org, including private ones (for the org's own listing). */

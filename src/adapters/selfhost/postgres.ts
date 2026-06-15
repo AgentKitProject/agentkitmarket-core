@@ -995,6 +995,12 @@ export function createPostgresOrgRepository(pool: PgPool): OrgRepository {
       await pool.query(`DELETE FROM org_invites WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
     },
 
+    async deleteOrg(orgId: string): Promise<void> {
+      await pool.query(`DELETE FROM org_invites WHERE org_id = $1`, [orgId]);
+      await pool.query(`DELETE FROM org_memberships WHERE org_id = $1`, [orgId]);
+      await pool.query(`DELETE FROM organizations WHERE org_id = $1`, [orgId]);
+    },
+
     async setKitOwnerOrg(kitId: string, orgId: string): Promise<KitRecord | undefined> {
       const result = await pool.query(
         `UPDATE kits SET owner_org_id = $2, updated_at = $3 WHERE kit_id = $1 RETURNING *`,
