@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.3.0...v0.4.0) (2026-06-15)
+
+
+### Features
+
+* implement AgentKitMarket Organizations (all 3 slices) ([6278e7d](https://github.com/AgentKitProject/agentkitmarket-core/commit/6278e7d05dd9a972a86dd6ff2dfc8e00594ff43b))
+
 ## [0.3.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.2.0...v0.3.0) (2026-06-15)
 
 
