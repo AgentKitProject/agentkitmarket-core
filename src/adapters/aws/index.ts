@@ -635,11 +635,23 @@ export function createDynamoAdminRepository(config: DynamoAdminConfig): AdminRep
         TableName: kitsTableName,
         Key: { kitId },
         // removeUndefinedValues drops cleared fields (free kits clear price/model/interval).
+        // Several of these names (currency, interval, downloadable) are DynamoDB
+        // reserved words, so every attribute is aliased via ExpressionAttributeNames.
         UpdateExpression:
-          'SET pricing = :pricing, priceModel = :priceModel, priceCents = :priceCents, currency = :currency, '
-          + '#interval = :interval, downloadable = :downloadable, licenseType = :licenseType, '
-          + 'licenseText = :licenseText, licenseVersion = :licenseVersion, updatedAt = :updatedAt',
-        ExpressionAttributeNames: { '#interval': 'interval' },
+          'SET #pricing = :pricing, #priceModel = :priceModel, #priceCents = :priceCents, #currency = :currency, '
+          + '#interval = :interval, #downloadable = :downloadable, #licenseType = :licenseType, '
+          + '#licenseText = :licenseText, #licenseVersion = :licenseVersion, updatedAt = :updatedAt',
+        ExpressionAttributeNames: {
+          '#pricing': 'pricing',
+          '#priceModel': 'priceModel',
+          '#priceCents': 'priceCents',
+          '#currency': 'currency',
+          '#interval': 'interval',
+          '#downloadable': 'downloadable',
+          '#licenseType': 'licenseType',
+          '#licenseText': 'licenseText',
+          '#licenseVersion': 'licenseVersion',
+        },
         ExpressionAttributeValues: {
           ':pricing': pricing.pricing,
           ':priceModel': pricing.priceModel,
