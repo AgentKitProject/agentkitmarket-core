@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.5.0...v0.6.0) (2026-06-15)
+
+
+### Features
+
+* **orgs:** implement delete-organization (DELETE /admin/orgs/{orgId}) ([88a8e75](https://github.com/AgentKitProject/agentkitmarket-core/commit/88a8e7537ef3dc67a174f4c15ffc33073a711f10))
+
 ## [0.5.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.4.0...v0.5.0) (2026-06-15)
 
 
