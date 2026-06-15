@@ -16,3 +16,11 @@ export type {
   MessageQueue,
   ValidationJobMessage,
 } from "./core/ports.js";
+
+// Domain services (pure shaping + state-machine helpers) and the
+// runtime-agnostic router. Entrypoints remain exposed only via the package
+// subpath exports (./entrypoints/lambda | server | worker).
+export * from "./core/services/index.js";
+export * from "./core/services/constants.js";
+export { routeRequest } from "./core/routes/index.js";
+export type { CoreRequest, CoreResponse, RouterDeps } from "./core/routes/types.js";

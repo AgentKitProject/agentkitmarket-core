@@ -1,0 +1,285 @@
+/**
+ * Hosted (AWS Lambda) entrypoint for the market core.
+ *
+ * THIN adapter: converts an APIGatewayProxyEvent into the router's CoreRequest,
+ * invokes the runtime-agnostic router with AWS-adapter-backed dependencies, and
+ * converts the CoreResponse back into an APIGatewayProxyResult. This is the only
+ * place where aws-lambda types and the AWS adapter factories are wired together
+ * for the hosted deployment.
+ *
+ * Behavior is identical to the original agentkitmarket-infra Lambda handler:
+ * - `createHandler(options)` keeps the same HandlerOptions shape (so existing
+ *   tests inject repositories/services directly), defaulting missing admin/
+ *   package services to lazily-created DynamoDB/S3/SQS adapters from env.
+ * - The exported `handler` uses lazy env-backed adapters for all three services.
+ */
+
+import type {
+  APIGatewayProxyEvent,
+  APIGatewayProxyResult,
+} from 'aws-lambda';
+import type {
+  AdminRepository,
+  CatalogRepository,
+  PackageUploadService,
+} from '../core/ports.js';
+import type { CatalogDetail, CatalogPage, CreateSubmissionInput, CreateSubmissionResult, KitRecord, KitVersionRecord, SubmissionRecord, ValidationJobRecord } from '../core/types.js';
+import { routeRequest } from '../core/routes/index.js';
+import type { CoreRequest } from '../core/routes/types.js';
+import {
+  createAwsPackageUploadService,
+  createDynamoAdminRepository,
+  createDynamoCatalogRepository,
+} from '../adapters/aws/index.js';
+
+// Re-exported for parity with the original handler module surface (consumed by
+// infra tests and the contracts-provider test).
+export { buildSubmissionRecord, toPublicKitDetail } from '../core/services/index.js';
+
+interface HandlerOptions {
+  repository: CatalogRepository;
+  adminRepository?: AdminRepository;
+  packageUploadService?: PackageUploadService;
+  allowedOrigins?: string[];
+  adminKey?: string;
+}
+
+export const handler = createHandler({
+  repository: createLazyDynamoCatalogRepository(),
+  adminRepository: createLazyDynamoAdminRepository(),
+  packageUploadService: createLazyAwsPackageUploadService(),
+});
+
+export function createHandler(options: HandlerOptions) {
+  return async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+    const allowedOrigins = options.allowedOrigins ?? parseAllowedOrigins(process.env.API_ALLOWED_ORIGINS);
+    const adminKey = options.adminKey ?? process.env.ADMIN_API_KEY;
+
+    // For /admin/* and /users/* routes the original handler lazily built the
+    // DynamoDB/S3/SQS services when not injected — and crucially, never read
+    // env (or constructed AWS clients) for public read routes. Preserve that by
+    // defaulting to LAZY adapters so env is only touched when an admin/user
+    // route actually invokes a method.
+    const adminRepository = options.adminRepository ?? createLazyDynamoAdminRepository();
+    const packageUploadService = options.packageUploadService ?? createLazyAwsPackageUploadService();
+
+    const response = await routeRequest(toCoreRequest(event), {
+      repository: options.repository,
+      adminRepository,
+      packageUploadService,
+      allowedOrigins,
+      adminKey,
+    });
+
+    return {
+      statusCode: response.statusCode,
+      headers: response.headers,
+      body: response.body,
+    };
+  };
+}
+
+function toCoreRequest(event: APIGatewayProxyEvent): CoreRequest {
+  return {
+    method: event.httpMethod,
+    resource: event.resource,
+    pathParameters: event.pathParameters,
+    queryStringParameters: event.queryStringParameters,
+    headers: event.headers ?? {},
+    body: event.body,
+    isBase64Encoded: event.isBase64Encoded,
+  };
+}
+
+function adminConfigFromEnv() {
+  return {
+    kitsTableName: requiredEnv('KITS_TABLE_NAME'),
+    kitVersionsTableName: requiredEnv('KIT_VERSIONS_TABLE_NAME'),
+    submissionsTableName: requiredEnv('SUBMISSIONS_TABLE_NAME'),
+    validationJobsTableName: requiredEnv('VALIDATION_JOBS_TABLE_NAME'),
+  };
+}
+
+function catalogConfigFromEnv() {
+  return {
+    kitsTableName: requiredEnv('KITS_TABLE_NAME'),
+    kitVersionsTableName: requiredEnv('KIT_VERSIONS_TABLE_NAME'),
+    publishersTableName: requiredEnv('PUBLISHERS_TABLE_NAME'),
+  };
+}
+
+function packageConfigFromEnv() {
+  return {
+    packageBucketName: requiredEnv('PACKAGE_BUCKET_NAME'),
+    validationQueueUrl: requiredEnv('VALIDATION_QUEUE_URL'),
+  };
+}
+
+function createLazyDynamoCatalogRepository(): CatalogRepository {
+  let repository: CatalogRepository | undefined;
+
+  const getRepository = (): CatalogRepository => {
+    repository ??= createDynamoCatalogRepository(catalogConfigFromEnv());
+    return repository;
+  };
+
+  return {
+    listKits(limit: number, nextToken: string | undefined): Promise<CatalogPage> {
+      return getRepository().listKits(limit, nextToken);
+    },
+
+    getKitBySlug(slug: string): Promise<CatalogDetail> {
+      return getRepository().getKitBySlug(slug);
+    },
+  };
+}
+
+function createLazyDynamoAdminRepository(): AdminRepository {
+  let repository: AdminRepository | undefined;
+
+  const getRepository = (): AdminRepository => {
+    repository ??= createDynamoAdminRepository(adminConfigFromEnv());
+    return repository;
+  };
+
+  return {
+    createSubmission(input: CreateSubmissionInput): Promise<CreateSubmissionResult> {
+      return getRepository().createSubmission(input);
+    },
+
+    findActiveDuplicateSubmission(input: CreateSubmissionInput): Promise<SubmissionRecord | undefined> {
+      return getRepository().findActiveDuplicateSubmission(input);
+    },
+
+    getSubmission(submissionId: string): Promise<SubmissionRecord | undefined> {
+      return getRepository().getSubmission(submissionId);
+    },
+
+    listSubmissions(): Promise<SubmissionRecord[]> {
+      return getRepository().listSubmissions();
+    },
+
+    createValidationJob(submission: SubmissionRecord): Promise<ValidationJobRecord> {
+      return getRepository().createValidationJob(submission);
+    },
+
+    markSubmissionValidationQueued(submissionId: string, validationJobId: string): Promise<void> {
+      return getRepository().markSubmissionValidationQueued(submissionId, validationJobId);
+    },
+
+    approveSubmission(
+      submissionId: string,
+      reviewNotes: string | null,
+      reviewedAt: string,
+    ): Promise<SubmissionRecord | undefined> {
+      return getRepository().approveSubmission(submissionId, reviewNotes, reviewedAt);
+    },
+
+    rejectSubmission(
+      submissionId: string,
+      reviewNotes: string,
+      reviewedAt: string,
+    ): Promise<SubmissionRecord | undefined> {
+      return getRepository().rejectSubmission(submissionId, reviewNotes, reviewedAt);
+    },
+
+    archiveSubmission(submissionId: string, archivedAt: string): Promise<SubmissionRecord | undefined> {
+      return getRepository().archiveSubmission(submissionId, archivedAt);
+    },
+
+    cancelSubmission(submissionId: string, canceledAt: string): Promise<SubmissionRecord | undefined> {
+      return getRepository().cancelSubmission(submissionId, canceledAt);
+    },
+
+    publishSubmission(submission: SubmissionRecord, publishedAt: string): Promise<KitRecord> {
+      return getRepository().publishSubmission(submission, publishedAt);
+    },
+
+    hideKit(kitId: string): Promise<KitRecord | undefined> {
+      return getRepository().hideKit(kitId);
+    },
+
+    unhideKit(kitId: string): Promise<KitRecord | undefined> {
+      return getRepository().unhideKit(kitId);
+    },
+
+    removeKit(kitId: string, removedAt: string): Promise<KitRecord | undefined> {
+      return getRepository().removeKit(kitId, removedAt);
+    },
+
+    getKit(kitId: string): Promise<KitRecord | undefined> {
+      return getRepository().getKit(kitId);
+    },
+
+    getKitBySlug(slug: string): Promise<KitRecord | undefined> {
+      return getRepository().getKitBySlug(slug);
+    },
+
+    getKitVersion(kitId: string, version: string): Promise<KitVersionRecord | undefined> {
+      return getRepository().getKitVersion(kitId, version);
+    },
+
+    listKitVersions(kitId: string): Promise<KitVersionRecord[]> {
+      return getRepository().listKitVersions(kitId);
+    },
+
+    findKitVersionBySha256(sha256: string): Promise<KitVersionRecord | undefined> {
+      return getRepository().findKitVersionBySha256(sha256);
+    },
+
+    incrementKitDownloads(kitId: string): Promise<void> {
+      return getRepository().incrementKitDownloads(kitId);
+    },
+  };
+}
+
+function createLazyAwsPackageUploadService(): PackageUploadService {
+  let service: PackageUploadService | undefined;
+
+  const getService = (): PackageUploadService => {
+    service ??= createAwsPackageUploadService(packageConfigFromEnv());
+    return service;
+  };
+
+  return {
+    createUploadUrl(packageS3Key: string): Promise<string> {
+      return getService().createUploadUrl(packageS3Key);
+    },
+
+    createDownloadUrl(packageS3Key: string): Promise<string> {
+      return getService().createDownloadUrl(packageS3Key);
+    },
+
+    packageExists(packageS3Key: string): Promise<boolean> {
+      return getService().packageExists(packageS3Key);
+    },
+
+    enqueueValidationJob(job: ValidationJobRecord): Promise<void> {
+      return getService().enqueueValidationJob(job);
+    },
+  };
+}
+
+function parseAllowedOrigins(value: string | undefined): string[] {
+  const origins = value
+    ?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  return origins && origins.length > 0 ? origins : DEFAULT_ALLOWED_ORIGINS;
+}
+
+function requiredEnv(name: string): string {
+  const value = process.env[name];
+
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+
+  return value;
+}
+
+const DEFAULT_ALLOWED_ORIGINS = [
+  'http://localhost:3000',
+  'https://market.agentkitproject.com',
+];
