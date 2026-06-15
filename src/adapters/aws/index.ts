@@ -347,45 +347,57 @@ export function createDynamoAdminRepository(config: DynamoAdminConfig): AdminRep
     },
 
     async archiveSubmission(submissionId: string, archivedAt: string): Promise<SubmissionRecord | undefined> {
-      const result = await dynamo.send(new UpdateCommand({
-        TableName: submissionsTableName,
-        Key: { submissionId },
-        UpdateExpression: 'SET #status = :status, archivedAt = :archivedAt, updatedAt = :updatedAt',
-        ConditionExpression: 'attribute_exists(submissionId) AND #status <> :publishedStatus',
-        ExpressionAttributeNames: {
-          '#status': 'status',
-        },
-        ExpressionAttributeValues: {
-          ':status': ARCHIVED_STATUS,
-          ':archivedAt': archivedAt,
-          ':updatedAt': archivedAt,
-          ':publishedStatus': PUBLIC_STATUS,
-        },
-        ReturnValues: 'ALL_NEW',
-      }));
+      try {
+        const result = await dynamo.send(new UpdateCommand({
+          TableName: submissionsTableName,
+          Key: { submissionId },
+          UpdateExpression: 'SET #status = :status, archivedAt = :archivedAt, updatedAt = :updatedAt',
+          ConditionExpression: 'attribute_exists(submissionId) AND #status <> :publishedStatus',
+          ExpressionAttributeNames: {
+            '#status': 'status',
+          },
+          ExpressionAttributeValues: {
+            ':status': ARCHIVED_STATUS,
+            ':archivedAt': archivedAt,
+            ':updatedAt': archivedAt,
+            ':publishedStatus': PUBLIC_STATUS,
+          },
+          ReturnValues: 'ALL_NEW',
+        }));
 
-      return isSubmissionRecord(result.Attributes) ? result.Attributes : undefined;
+        return isSubmissionRecord(result.Attributes) ? result.Attributes : undefined;
+      } catch (error) {
+        // Condition failed (missing or already published) → graceful refusal
+        // (undefined), matching the Postgres adapter + the route's handling.
+        if ((error as { name?: string })?.name === 'ConditionalCheckFailedException') return undefined;
+        throw error;
+      }
     },
 
     async cancelSubmission(submissionId: string, canceledAt: string): Promise<SubmissionRecord | undefined> {
-      const result = await dynamo.send(new UpdateCommand({
-        TableName: submissionsTableName,
-        Key: { submissionId },
-        UpdateExpression: 'SET #status = :status, canceledAt = :canceledAt, updatedAt = :updatedAt',
-        ConditionExpression: 'attribute_exists(submissionId) AND #status <> :publishedStatus',
-        ExpressionAttributeNames: {
-          '#status': 'status',
-        },
-        ExpressionAttributeValues: {
-          ':status': CANCELED_STATUS,
-          ':canceledAt': canceledAt,
-          ':updatedAt': canceledAt,
-          ':publishedStatus': PUBLIC_STATUS,
-        },
-        ReturnValues: 'ALL_NEW',
-      }));
+      try {
+        const result = await dynamo.send(new UpdateCommand({
+          TableName: submissionsTableName,
+          Key: { submissionId },
+          UpdateExpression: 'SET #status = :status, canceledAt = :canceledAt, updatedAt = :updatedAt',
+          ConditionExpression: 'attribute_exists(submissionId) AND #status <> :publishedStatus',
+          ExpressionAttributeNames: {
+            '#status': 'status',
+          },
+          ExpressionAttributeValues: {
+            ':status': CANCELED_STATUS,
+            ':canceledAt': canceledAt,
+            ':updatedAt': canceledAt,
+            ':publishedStatus': PUBLIC_STATUS,
+          },
+          ReturnValues: 'ALL_NEW',
+        }));
 
-      return isSubmissionRecord(result.Attributes) ? result.Attributes : undefined;
+        return isSubmissionRecord(result.Attributes) ? result.Attributes : undefined;
+      } catch (error) {
+        if ((error as { name?: string })?.name === 'ConditionalCheckFailedException') return undefined;
+        throw error;
+      }
     },
 
     async publishSubmission(submission: SubmissionRecord, publishedAt: string): Promise<KitRecord> {
