@@ -79,7 +79,18 @@ export async function startServer(): Promise<StartServerResult> {
   }
 
   const pool = new Pool({ connectionString: config.postgresUrl });
-  await pool.query(readSchemaSql());
+  // Serialize schema init across replicas: concurrent `CREATE TABLE IF NOT EXISTS`
+  // from multiple API pods races on pg_type (duplicate-key error). A session-level
+  // advisory lock makes only one pod create the schema; the rest no-op.
+  const SCHEMA_LOCK_KEY = 778899;
+  const schemaClient = await pool.connect();
+  try {
+    await schemaClient.query('SELECT pg_advisory_lock($1)', [SCHEMA_LOCK_KEY]);
+    await schemaClient.query(readSchemaSql());
+  } finally {
+    await schemaClient.query('SELECT pg_advisory_unlock($1)', [SCHEMA_LOCK_KEY]).catch(() => {});
+    schemaClient.release();
+  }
 
   const redis = new Redis(config.redisUrl);
   const queue = createRedisQueue({ client: redis });
