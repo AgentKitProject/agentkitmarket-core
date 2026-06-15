@@ -1,0 +1,42 @@
+{{- if and .Values.web.enabled .Values.web.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "agentkitmarket.fullname" . }}-web
+  labels:
+    {{- include "agentkitmarket.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+  {{- with .Values.web.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.web.ingress.className }}
+  ingressClassName: {{ .Values.web.ingress.className }}
+  {{- end }}
+  {{- if .Values.web.ingress.tls }}
+  tls:
+    {{- toYaml .Values.web.ingress.tls | nindent 4 }}
+  {{- end }}
+  {{- if .Values.web.ingress.host }}
+  rules:
+    - host: {{ .Values.web.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentkitmarket.fullname" . }}-web
+                port:
+                  name: http
+  {{- else }}
+  # No host → catch-all defaultBackend. Required for tailscale ingress, where the
+  # real Host is the full tailnet FQDN; the served name comes from tls.hosts.
+  defaultBackend:
+    service:
+      name: {{ include "agentkitmarket.fullname" . }}-web
+      port:
+        name: http
+  {{- end }}
+{{- end }}

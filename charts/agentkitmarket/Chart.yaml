@@ -1,6 +1,6 @@
 apiVersion: v2
 name: agentkitmarket
-description: Self-hosted AgentKit Market backend (API server + worker)
+description: Self-hosted AgentKit Market (web UI + API server + worker)
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

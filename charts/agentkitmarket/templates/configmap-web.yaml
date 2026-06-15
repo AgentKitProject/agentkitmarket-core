@@ -1,0 +1,40 @@
+{{- if .Values.web.enabled -}}
+{{- $fullname := include "agentkitmarket.fullname" . -}}
+{{- /* Default the backend URL to the in-cluster API Service when not overridden. */ -}}
+{{- $apiBaseUrl := .Values.web.config.apiBaseUrl -}}
+{{- if not $apiBaseUrl -}}
+  {{- $apiBaseUrl = printf "http://%s-api" $fullname -}}
+{{- end -}}
+{{- $appUrl := .Values.web.config.appUrl -}}
+{{- $redirect := .Values.web.config.workosRedirectUri -}}
+{{- if and (not $redirect) $appUrl -}}
+  {{- $redirect = printf "%s/auth/callback" (trimSuffix "/" $appUrl) -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentkitmarket.webConfigmapName" . }}
+  labels:
+    {{- include "agentkitmarket.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+data:
+  NODE_ENV: "production"
+  PORT: {{ .Values.web.port | quote }}
+  HOSTNAME: "0.0.0.0"
+  # Backend URL — server-side only; the browser never reads it.
+  NEXT_PUBLIC_AGENTKITMARKET_API_BASE_URL: {{ $apiBaseUrl | quote }}
+  {{- if $appUrl }}
+  APP_URL: {{ $appUrl | quote }}
+  NEXT_PUBLIC_APP_URL: {{ $appUrl | quote }}
+  {{- end }}
+  {{- if $redirect }}
+  WORKOS_REDIRECT_URI: {{ $redirect | quote }}
+  NEXT_PUBLIC_WORKOS_REDIRECT_URI: {{ $redirect | quote }}
+  {{- end }}
+  {{- if .Values.web.config.adminEmails }}
+  AGENTKITMARKET_ADMIN_EMAILS: {{ .Values.web.config.adminEmails | quote }}
+  {{- end }}
+  {{- if .Values.web.config.profileApiBaseUrl }}
+  PROFILE_API_BASE_URL: {{ .Values.web.config.profileApiBaseUrl | quote }}
+  {{- end }}
+{{- end }}

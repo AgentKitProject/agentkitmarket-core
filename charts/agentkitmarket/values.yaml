@@ -40,6 +40,81 @@ api:
     #      - market.example.com
 
 # ---------------------------------------------------------------------------
+# Web app (agentkitmarket-app — the Next.js UI)
+#
+# One runtime-configured image. The backend URL defaults to the in-cluster API
+# Service (http://<release>-api), so a self-hoster runs ONE image pointing at
+# their self-hosted backend with no rebuild. WorkOS / admin / profile config is
+# supplied at runtime via the web ConfigMap + Secret below.
+# ---------------------------------------------------------------------------
+web:
+  enabled: true
+  replicas: 2
+  port: 3000
+  image:
+    repository: ghcr.io/agentkitproject/agentkitmarket-app
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 80
+  # Non-secret runtime config (ConfigMap). Leave apiBaseUrl empty to default to
+  # the in-cluster API Service. Set appUrl / workosRedirectUri to your public
+  # origin so AuthKit redirects resolve correctly.
+  config:
+    # Backend URL the web app's server routes call. Empty → in-cluster API:
+    #   http://<release>-api  (ClusterIP Service on port 80)
+    apiBaseUrl: ""
+    # Public origin of the web app (APP_URL / NEXT_PUBLIC_APP_URL).
+    appUrl: ""
+    # WorkOS redirect URI (WORKOS_REDIRECT_URI). Empty → "<appUrl>/auth/callback".
+    workosRedirectUri: ""
+    # Comma-separated admin emails (AGENTKITMARKET_ADMIN_EMAILS).
+    adminEmails: ""
+    # Server-side Profile API base URL (PROFILE_API_BASE_URL). Optional.
+    profileApiBaseUrl: ""
+  # Secret runtime config. Self-hosters bring their own WorkOS. Either set these
+  # inline (use a --values secrets.yaml NOT committed to git) or source them from
+  # an existing Secret (e.g. one synced by Infisical) via existingSecret.
+  secrets:
+    # Use an externally-managed Secret instead of the chart-managed one. When set,
+    # the inline values below are ignored and envFrom references this Secret. The
+    # referenced Secret must provide the keys the web app expects (WORKOS_API_KEY,
+    # WORKOS_CLIENT_ID, WORKOS_COOKIE_PASSWORD, AGENTKITMARKET_ADMIN_KEY, and
+    # optionally PROFILE_SERVICE_KEY).
+    existingSecret: ""
+    # WorkOS AuthKit (required for login / admin / submit; public browsing works
+    # without these — auth only gates admin/submit flows).
+    workosApiKey: ""
+    workosClientId: ""
+    # Must be >= 32 chars. Generate with: openssl rand -base64 32
+    workosCookiePassword: ""
+    # Shared admin key for the web app's server routes → backend (must match the
+    # backend's secrets.adminApiKey / ADMIN_API_KEY).
+    adminApiKey: ""
+    # Optional bearer for the Profile API.
+    profileServiceKey: ""
+  # Tailscale (or other) ingress for the web UI. Mirrors the api ingress:
+  # leave host empty for the tailscale defaultBackend pattern (served name comes
+  # from tls.hosts).
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    annotations: {}
+    #   tailscale.com/expose: "true"
+    tls: []
+    #  - hosts:
+    #      - market.example.ts.net
+
+# ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
 worker:

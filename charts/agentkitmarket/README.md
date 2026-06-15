@@ -1,6 +1,30 @@
 # agentkitmarket Helm Chart
 
-Self-hosted AgentKit Market backend: API server + background worker.
+Self-hosted AgentKit Market: web UI (`agentkitmarket-app`) + API server +
+background worker, plus optional bundled Postgres / MinIO / Redis.
+
+## Web app (UI)
+
+The Next.js web app ships as a single runtime-configured image
+(`ghcr.io/agentkitproject/agentkitmarket-app`) and is enabled by default
+(`web.enabled=true`). One image serves any deployment — nothing about the
+backend URL or WorkOS is baked at build time.
+
+- **Backend URL**: server-side only. Defaults to the in-cluster API Service
+  (`http://<release>-api`); override with `web.config.apiBaseUrl`.
+- **Public browsing works without login.** WorkOS is only needed for sign-in,
+  admin review, submit, and browser-initiated downloads. Self-hosters bring
+  their own WorkOS; supply `web.secrets.workosApiKey` / `workosClientId` /
+  `workosCookiePassword` (or `web.secrets.existingSecret`) and
+  `web.config.appUrl`.
+- **Admin → backend key**: `web.secrets.adminApiKey` must match the backend's
+  `secrets.adminApiKey`.
+- **Ingress split**: `web.ingress` exposes the UI and `api.ingress` exposes the
+  API; both follow the tailscale `defaultBackend` pattern (leave `host` empty).
+  Expose the web ingress to users; the API can stay ClusterIP-internal since the
+  web app calls it in-cluster.
+
+Disable the UI (backend-only) with `--set web.enabled=false`.
 
 ## Quick start
 

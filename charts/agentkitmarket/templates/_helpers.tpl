@@ -42,6 +42,40 @@ app.kubernetes.io/component: worker
 {{- end }}
 
 {{/*
+Selector labels — web
+*/}}
+{{- define "agentkitmarket.selectorLabelsWeb" -}}
+app.kubernetes.io/name: {{ include "agentkitmarket.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: web
+{{- end }}
+
+{{/*
+Web ConfigMap name
+*/}}
+{{- define "agentkitmarket.webConfigmapName" -}}
+{{ include "agentkitmarket.fullname" . }}-web-config
+{{- end }}
+
+{{/*
+Web Secret name (chart-managed)
+*/}}
+{{- define "agentkitmarket.webSecretName" -}}
+{{ include "agentkitmarket.fullname" . }}-web-secret
+{{- end }}
+
+{{/*
+Effective web Secret name — the existing Secret if provided, else chart-managed.
+*/}}
+{{- define "agentkitmarket.webEffectiveSecretName" -}}
+{{- if .Values.web.secrets.existingSecret -}}
+{{ .Values.web.secrets.existingSecret }}
+{{- else -}}
+{{ include "agentkitmarket.webSecretName" . }}
+{{- end -}}
+{{- end }}
+
+{{/*
 ConfigMap name
 */}}
 {{- define "agentkitmarket.configmapName" -}}
