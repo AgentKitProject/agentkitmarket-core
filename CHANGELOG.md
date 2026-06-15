@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.6.0...v0.7.0) (2026-06-15)
+
+
+### Features
+
+* **pricing:** Tier-2 paid/licensed kit backend foundation ([247f0a5](https://github.com/AgentKitProject/agentkitmarket-core/commit/247f0a537006360a8dd7d4b9db238e0f31ab543c))
+
+
+### Bug Fixes
+
+* **pricing:** alias DynamoDB reserved words in setKitPricing UpdateExpression ([6104d91](https://github.com/AgentKitProject/agentkitmarket-core/commit/6104d9181815b7f322951ea8b7a170602717f5fb))
+* **pricing:** build setKitPricing UpdateExpression dynamically (SET/REMOVE) ([10e468f](https://github.com/AgentKitProject/agentkitmarket-core/commit/10e468f0e2e9b16d621e4b7c2708d52562741c09))
+
 ## [0.6.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.5.0...v0.6.0) (2026-06-15)
 
 
