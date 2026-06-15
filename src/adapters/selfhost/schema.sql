@@ -138,6 +138,13 @@ CREATE TABLE IF NOT EXISTS validation_jobs (
 
 CREATE INDEX IF NOT EXISTS validation_jobs_kit_id_idx ON validation_jobs (kit_id);
 
+-- Upgrade-safe column adds: CREATE TABLE IF NOT EXISTS won't add columns to a
+-- pre-existing table, so existing deployments need explicit ALTERs before the
+-- index below references them.
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS owner_org_id text;
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS visibility text;
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS owner_org_id text;
+
 -- Index for the private-catalog "list this org's kits" query.
 CREATE INDEX IF NOT EXISTS kits_owner_org_id_idx ON kits (owner_org_id);
 
