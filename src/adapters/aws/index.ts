@@ -631,39 +631,47 @@ export function createDynamoAdminRepository(config: DynamoAdminConfig): AdminRep
         return undefined;
       }
       const updatedAt = new Date().toISOString();
+      // Build SET (for present fields) + REMOVE (for cleared fields) dynamically.
+      // A free kit clears price/model/interval; a one-time kit clears interval;
+      // the default-license path clears licenseText. We must not reference a
+      // value placeholder that has no value (DynamoDB ValidationException), and
+      // several names (currency/interval/downloadable) are reserved words.
+      const fields: Array<[string, unknown]> = [
+        ['pricing', pricing.pricing],
+        ['priceModel', pricing.priceModel],
+        ['priceCents', pricing.priceCents],
+        ['currency', pricing.currency],
+        ['interval', pricing.interval],
+        ['downloadable', pricing.downloadable],
+        ['licenseType', pricing.licenseType],
+        ['licenseText', pricing.licenseText],
+        ['licenseVersion', pricing.licenseVersion],
+      ];
+      const setEntries = fields.filter(([, value]) => value !== undefined);
+      const removeNames = fields.filter(([, value]) => value === undefined).map(([name]) => name);
+
+      const names: Record<string, string> = { '#updatedAt': 'updatedAt' };
+      const values: Record<string, unknown> = { ':updatedAt': updatedAt };
+      const setClauses = ['#updatedAt = :updatedAt'];
+      for (const [name, value] of setEntries) {
+        names[`#${name}`] = name;
+        values[`:${name}`] = value;
+        setClauses.push(`#${name} = :${name}`);
+      }
+      const removeClauses: string[] = [];
+      for (const name of removeNames) {
+        names[`#${name}`] = name;
+        removeClauses.push(`#${name}`);
+      }
+      const updateExpression = `SET ${setClauses.join(', ')}`
+        + (removeClauses.length > 0 ? ` REMOVE ${removeClauses.join(', ')}` : '');
+
       const result = await dynamo.send(new UpdateCommand({
         TableName: kitsTableName,
         Key: { kitId },
-        // removeUndefinedValues drops cleared fields (free kits clear price/model/interval).
-        // Several of these names (currency, interval, downloadable) are DynamoDB
-        // reserved words, so every attribute is aliased via ExpressionAttributeNames.
-        UpdateExpression:
-          'SET #pricing = :pricing, #priceModel = :priceModel, #priceCents = :priceCents, #currency = :currency, '
-          + '#interval = :interval, #downloadable = :downloadable, #licenseType = :licenseType, '
-          + '#licenseText = :licenseText, #licenseVersion = :licenseVersion, updatedAt = :updatedAt',
-        ExpressionAttributeNames: {
-          '#pricing': 'pricing',
-          '#priceModel': 'priceModel',
-          '#priceCents': 'priceCents',
-          '#currency': 'currency',
-          '#interval': 'interval',
-          '#downloadable': 'downloadable',
-          '#licenseType': 'licenseType',
-          '#licenseText': 'licenseText',
-          '#licenseVersion': 'licenseVersion',
-        },
-        ExpressionAttributeValues: {
-          ':pricing': pricing.pricing,
-          ':priceModel': pricing.priceModel,
-          ':priceCents': pricing.priceCents,
-          ':currency': pricing.currency,
-          ':interval': pricing.interval,
-          ':downloadable': pricing.downloadable,
-          ':licenseType': pricing.licenseType,
-          ':licenseText': pricing.licenseText,
-          ':licenseVersion': pricing.licenseVersion,
-          ':updatedAt': updatedAt,
-        },
+        UpdateExpression: updateExpression,
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values,
         ReturnValues: 'ALL_NEW',
       }));
       return isKitRecord(result.Attributes) ? result.Attributes : undefined;
