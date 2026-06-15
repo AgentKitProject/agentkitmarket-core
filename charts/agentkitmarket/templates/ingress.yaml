@@ -17,6 +17,7 @@ spec:
   tls:
     {{- toYaml .Values.api.ingress.tls | nindent 4 }}
   {{- end }}
+  {{- if .Values.api.ingress.host }}
   rules:
     - host: {{ .Values.api.ingress.host | quote }}
       http:
@@ -28,4 +29,13 @@ spec:
                 name: {{ include "agentkitmarket.fullname" . }}-api
                 port:
                   name: http
+  {{- else }}
+  # No host → catch-all defaultBackend. Required for tailscale ingress, where the
+  # real Host is the full tailnet FQDN; the served name comes from tls.hosts.
+  defaultBackend:
+    service:
+      name: {{ include "agentkitmarket.fullname" . }}-api
+      port:
+        name: http
+  {{- end }}
 {{- end }}
