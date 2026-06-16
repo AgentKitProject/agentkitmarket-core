@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.7.0...v0.8.0) (2026-06-16)
+
+
+### Features
+
+* add cloud-synced favorites (Seam B repository + routes) ([ef63edc](https://github.com/AgentKitProject/agentkitmarket-core/commit/ef63edcf4c6f907653f2c6cbc228d27f6a0f9900))
+
 ## [0.7.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.6.0...v0.7.0) (2026-06-15)
 
 
