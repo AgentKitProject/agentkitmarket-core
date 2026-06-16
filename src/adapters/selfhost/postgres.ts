@@ -21,17 +21,20 @@ import type {
   AdminRepository,
   CatalogRepository,
   EntitlementRepository,
+  FavoritesRepository,
   KitPricingUpdate,
   OrgRepository,
   SubmissionValidationUpdate,
   ValidationJobUpdate,
 } from '../../core/ports.js';
 import type {
+  AddFavoriteInput,
   CatalogDetail,
   CatalogPage,
   CreateSubmissionInput,
   CreateSubmissionResult,
   Entitlement,
+  Favorite,
   GrantEntitlementInput,
   KitRecord,
   KitVersionRecord,
@@ -271,6 +274,18 @@ function rowToEntitlement(row: any): Entitlement {
     grantedAt: row.granted_at,
     expiresAt: str(row.expires_at),
     stripeSubscriptionId: row.stripe_subscription_id ?? null,
+  };
+}
+
+function rowToFavorite(row: any): Favorite {
+  return {
+    userId: row.user_id,
+    kitId: row.kit_id,
+    slug: row.slug,
+    addedAt: row.added_at,
+    displayName: str(row.display_name),
+    summary: str(row.summary),
+    publisherName: str(row.publisher_name),
   };
 }
 
@@ -1182,6 +1197,48 @@ export function createPostgresEntitlementRepository(pool: PgPool): EntitlementRe
         [kitId],
       );
       return result.rows.map(rowToEntitlement);
+    },
+  };
+}
+
+// --- favorites repository (cloud-synced kit references) -------------------------
+
+export function createPostgresFavoritesRepository(pool: PgPool): FavoritesRepository {
+  return {
+    async addFavorite(userId: string, input: AddFavoriteInput): Promise<Favorite> {
+      const now = new Date().toISOString();
+      // Idempotent on (user_id, kit_id): refresh cached metadata + slug but
+      // preserve the original added_at.
+      const result = await pool.query(
+        `INSERT INTO favorites (user_id, kit_id, slug, added_at, display_name, summary, publisher_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (user_id, kit_id) DO UPDATE SET
+           slug = EXCLUDED.slug,
+           display_name = EXCLUDED.display_name,
+           summary = EXCLUDED.summary,
+           publisher_name = EXCLUDED.publisher_name
+         RETURNING *`,
+        [
+          userId, input.kitId, input.slug, now,
+          input.displayName ?? null, input.summary ?? null, input.publisherName ?? null,
+        ],
+      );
+      return rowToFavorite(result.rows[0]);
+    },
+
+    async listFavorites(userId: string): Promise<Favorite[]> {
+      const result = await pool.query(
+        `SELECT * FROM favorites WHERE user_id = $1 ORDER BY added_at`,
+        [userId],
+      );
+      return result.rows.map(rowToFavorite);
+    },
+
+    async removeFavorite(userId: string, kitId: string): Promise<void> {
+      await pool.query(
+        `DELETE FROM favorites WHERE user_id = $1 AND kit_id = $2`,
+        [userId, kitId],
+      );
     },
   };
 }

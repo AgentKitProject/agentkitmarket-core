@@ -17,11 +17,13 @@
  */
 
 import type {
+  AddFavoriteInput,
   CatalogPage,
   CatalogDetail,
   CreateSubmissionInput,
   CreateSubmissionResult,
   Entitlement,
+  Favorite,
   GrantEntitlementInput,
   KitRecord,
   KitVersionRecord,
@@ -160,6 +162,20 @@ export interface EntitlementRepository {
   /** Flips an active entitlement to `revoked`; returns the updated row or undefined. */
   revokeEntitlement(userId: string, kitId: string): Promise<Entitlement | undefined>;
   listEntitlementsForKit(kitId: string): Promise<Entitlement[]>;
+}
+
+/**
+ * Cloud-synced kit-reference favorites, shared by desktop + web Forge and the
+ * Market web app. Both adapters (AWS DynamoDB: PK userId / SK kitId; self-host
+ * Postgres: PK (user_id, kit_id) + index on user_id) implement this identically;
+ * the dual-backend contract suite enforces parity. Favorites are references,
+ * never kit copies — cached display metadata is best-effort.
+ */
+export interface FavoritesRepository {
+  /** Idempotent on (userId, kitId): re-adding refreshes cached metadata + addedAt is preserved. */
+  addFavorite(userId: string, input: AddFavoriteInput): Promise<Favorite>;
+  listFavorites(userId: string): Promise<Favorite[]>;
+  removeFavorite(userId: string, kitId: string): Promise<void>;
 }
 
 /** Fields the validation worker writes to a ValidationJob row. */

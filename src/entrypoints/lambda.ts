@@ -22,6 +22,7 @@ import type {
   AdminRepository,
   CatalogRepository,
   EntitlementRepository,
+  FavoritesRepository,
   KitPricingUpdate,
   ObjectStore,
   OrgRepository,
@@ -29,7 +30,7 @@ import type {
   SubmissionValidationUpdate,
   ValidationJobUpdate,
 } from '../core/ports.js';
-import type { CatalogDetail, CatalogPage, CreateSubmissionInput, CreateSubmissionResult, Entitlement, GrantEntitlementInput, KitRecord, KitVersionRecord, SubmissionRecord, ValidationJobRecord } from '../core/types.js';
+import type { AddFavoriteInput, CatalogDetail, CatalogPage, CreateSubmissionInput, CreateSubmissionResult, Entitlement, Favorite, GrantEntitlementInput, KitRecord, KitVersionRecord, SubmissionRecord, ValidationJobRecord } from '../core/types.js';
 import { routeRequest } from '../core/routes/index.js';
 import { matchRoute } from './route-table.js';
 import type { CoreRequest } from '../core/routes/types.js';
@@ -38,6 +39,7 @@ import {
   createDynamoAdminRepository,
   createDynamoCatalogRepository,
   createDynamoEntitlementRepository,
+  createDynamoFavoritesRepository,
   createDynamoOrgRepository,
   createS3ObjectStore,
 } from '../adapters/aws/index.js';
@@ -51,6 +53,7 @@ interface HandlerOptions {
   adminRepository?: AdminRepository;
   orgRepository?: OrgRepository;
   entitlementRepository?: EntitlementRepository;
+  favoritesRepository?: FavoritesRepository;
   packageUploadService?: PackageUploadService;
   objectStore?: ObjectStore;
   allowedOrigins?: string[];
@@ -62,6 +65,7 @@ export const handler = createHandler({
   adminRepository: createLazyDynamoAdminRepository(),
   orgRepository: createLazyDynamoOrgRepository(),
   entitlementRepository: createLazyDynamoEntitlementRepository(),
+  favoritesRepository: createLazyDynamoFavoritesRepository(),
   packageUploadService: createLazyAwsPackageUploadService(),
   objectStore: createLazyS3ObjectStore(),
 });
@@ -79,6 +83,7 @@ export function createHandler(options: HandlerOptions) {
     const adminRepository = options.adminRepository ?? createLazyDynamoAdminRepository();
     const orgRepository = options.orgRepository ?? createLazyDynamoOrgRepository();
     const entitlementRepository = options.entitlementRepository ?? createLazyDynamoEntitlementRepository();
+    const favoritesRepository = options.favoritesRepository ?? createLazyDynamoFavoritesRepository();
     const packageUploadService = options.packageUploadService ?? createLazyAwsPackageUploadService();
     const objectStore = options.objectStore ?? createLazyS3ObjectStore();
 
@@ -87,6 +92,7 @@ export function createHandler(options: HandlerOptions) {
       adminRepository,
       orgRepository,
       entitlementRepository,
+      favoritesRepository,
       packageUploadService,
       objectStore,
       allowedOrigins,
@@ -163,6 +169,12 @@ function orgConfigFromEnv() {
 function entitlementConfigFromEnv() {
   return {
     entitlementsTableName: requiredEnv('ENTITLEMENTS_TABLE_NAME'),
+  };
+}
+
+function favoritesConfigFromEnv() {
+  return {
+    favoritesTableName: requiredEnv('FAVORITES_TABLE_NAME'),
   };
 }
 
@@ -367,6 +379,27 @@ function createLazyDynamoEntitlementRepository(): EntitlementRepository {
     },
     listEntitlementsForKit(kitId: string): Promise<Entitlement[]> {
       return getRepository().listEntitlementsForKit(kitId);
+    },
+  };
+}
+
+function createLazyDynamoFavoritesRepository(): FavoritesRepository {
+  let repository: FavoritesRepository | undefined;
+
+  const getRepository = (): FavoritesRepository => {
+    repository ??= createDynamoFavoritesRepository(favoritesConfigFromEnv());
+    return repository;
+  };
+
+  return {
+    addFavorite(userId: string, input: AddFavoriteInput): Promise<Favorite> {
+      return getRepository().addFavorite(userId, input);
+    },
+    listFavorites(userId: string): Promise<Favorite[]> {
+      return getRepository().listFavorites(userId);
+    },
+    removeFavorite(userId: string, kitId: string): Promise<void> {
+      return getRepository().removeFavorite(userId, kitId);
     },
   };
 }

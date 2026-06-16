@@ -12,6 +12,7 @@ import type {
   AdminRepository,
   CatalogRepository,
   EntitlementRepository,
+  FavoritesRepository,
   ObjectStore,
   OrgRepository,
   PackageUploadService,
@@ -48,6 +49,8 @@ export interface RouterDeps {
   orgRepository?: OrgRepository;
   /** Tier-2 buyer entitlements (paid kits). */
   entitlementRepository?: EntitlementRepository;
+  /** Cloud-synced kit-reference favorites. */
+  favoritesRepository?: FavoritesRepository;
   packageUploadService?: PackageUploadService;
   /** Object store for reading kit packages (Tier-2 watermarked licensed-package fetch). */
   objectStore?: ObjectStore;

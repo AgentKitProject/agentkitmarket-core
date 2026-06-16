@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import type { AdminRepository, CatalogRepository, EntitlementRepository, ObjectStore, OrgRepository } from '../src/core/ports.js';
+import type { AdminRepository, CatalogRepository, EntitlementRepository, FavoritesRepository, ObjectStore, OrgRepository } from '../src/core/ports.js';
 import type {
   CreateSubmissionInput,
   SubmissionRecord,
@@ -38,6 +38,8 @@ export interface ContractRepos {
   org?: OrgRepository;
   /** Entitlement repository (Tier-2 paid kits). Both adapters provide it. */
   entitlement?: EntitlementRepository;
+  /** Favorites repository (cloud-synced kit references). Both adapters provide it. */
+  favorites?: FavoritesRepository;
   /** Truncate/recreate all backing tables so each test starts clean. */
   reset: () => Promise<void>;
 }
@@ -1005,6 +1007,117 @@ export function runRepositoryContract(name: string, makeRepos: MakeRepos): void 
           );
           expect(res.statusCode).toBe(200);
         });
+      });
+    });
+
+    describe('favorites (cloud-synced kit references)', () => {
+      function fav(): FavoritesRepository {
+        if (!repos.favorites) {
+          throw new Error('FavoritesRepository not provided by this backend');
+        }
+        return repos.favorites;
+      }
+
+      async function publishKit(input: CreateSubmissionInput): Promise<string> {
+        const queued = await uploadAndQueue(repos.admin, input);
+        const kit = await repos.admin.publishSubmission(
+          { ...queued, validationStatus: 'passed' },
+          new Date().toISOString(),
+        );
+        return kit.kitId;
+      }
+
+      function req(method: string, resource: string, pathParameters: Record<string, string>, body?: unknown): CoreRequest {
+        return {
+          method,
+          resource,
+          pathParameters,
+          queryStringParameters: null,
+          headers: { 'x-agentkitmarket-admin-key': 'test-admin-key' },
+          body: body === undefined ? null : JSON.stringify(body),
+        };
+      }
+
+      function deps(): RouterDeps {
+        return {
+          repository: repos.catalog,
+          adminRepository: repos.admin,
+          orgRepository: repos.org,
+          favoritesRepository: repos.favorites,
+          adminKey: 'test-admin-key',
+        };
+      }
+
+      it('adds (by slug), lists, and removes a favorite', async () => {
+        const kitId = await publishKit(baseInput());
+
+        const addRes = await routeRequest(
+          req('POST', '/admin/users/{userId}/favorites', { userId: 'u_fav' }, { slug: 'my-cool-kit' }),
+          deps(),
+        );
+        expect(addRes.statusCode).toBe(201);
+        const item = JSON.parse(addRes.body).item;
+        expect(item.kitId).toBe(kitId);
+        expect(item.slug).toBe('my-cool-kit');
+        // Best-effort cached display metadata is resolved from the kit.
+        expect(item.displayName).toBe('My Cool Kit');
+        expect(item.publisherName).toBe('Ada Lovelace');
+
+        const listRes = await routeRequest(
+          req('GET', '/admin/users/{userId}/favorites', { userId: 'u_fav' }),
+          deps(),
+        );
+        expect(listRes.statusCode).toBe(200);
+        expect(JSON.parse(listRes.body).items).toHaveLength(1);
+
+        const delRes = await routeRequest(
+          req('DELETE', '/admin/users/{userId}/favorites/{kitId}', { userId: 'u_fav', kitId }),
+          deps(),
+        );
+        expect(delRes.statusCode).toBe(200);
+        expect(JSON.parse(delRes.body)).toEqual({ ok: true, kitId });
+
+        const listAfter = await routeRequest(
+          req('GET', '/admin/users/{userId}/favorites', { userId: 'u_fav' }),
+          deps(),
+        );
+        expect(JSON.parse(listAfter.body).items).toHaveLength(0);
+      });
+
+      it('adds by kitId', async () => {
+        const kitId = await publishKit(baseInput());
+        const res = await routeRequest(
+          req('POST', '/admin/users/{userId}/favorites', { userId: 'u_fav2' }, { kitId }),
+          deps(),
+        );
+        expect(res.statusCode).toBe(201);
+        expect(JSON.parse(res.body).item.kitId).toBe(kitId);
+      });
+
+      it('is idempotent on (userId, kitId) and preserves addedAt', async () => {
+        const kitId = await publishKit(baseInput());
+        const first = await fav().addFavorite('u_idem', { kitId, slug: 'my-cool-kit', displayName: 'My Cool Kit' });
+        const second = await fav().addFavorite('u_idem', { kitId, slug: 'my-cool-kit', displayName: 'Renamed' });
+        expect(second.addedAt).toBe(first.addedAt);
+        expect(second.displayName).toBe('Renamed');
+        const items = await fav().listFavorites('u_idem');
+        expect(items).toHaveLength(1);
+      });
+
+      it('404 when the referenced kit does not exist', async () => {
+        const res = await routeRequest(
+          req('POST', '/admin/users/{userId}/favorites', { userId: 'u_fav3' }, { slug: 'no-such-kit' }),
+          deps(),
+        );
+        expect(res.statusCode).toBe(404);
+      });
+
+      it('removeFavorite is idempotent (no error for an absent favorite)', async () => {
+        const res = await routeRequest(
+          req('DELETE', '/admin/users/{userId}/favorites/{kitId}', { userId: 'u_fav4', kitId: 'kit_nope' }),
+          deps(),
+        );
+        expect(res.statusCode).toBe(200);
       });
     });
   });

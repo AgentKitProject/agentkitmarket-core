@@ -107,6 +107,30 @@ export interface OrgInvite {
   createdAt: string;
 }
 
+/**
+ * A cloud-synced reference to a Market kit. Mirrors `Favorite` in
+ * @agentkitforge/contracts. Never a copy of kit contents; cached display
+ * metadata is optional/best-effort.
+ */
+export interface Favorite {
+  userId: string;
+  kitId: string;
+  slug: string;
+  addedAt: string;
+  displayName?: string;
+  summary?: string;
+  publisherName?: string;
+}
+
+/** Cached display metadata + identity for a favorite, resolved at add time. */
+export interface AddFavoriteInput {
+  kitId: string;
+  slug: string;
+  displayName?: string;
+  summary?: string;
+  publisherName?: string;
+}
+
 export interface SafeInput {
   name: string;
   label?: string;

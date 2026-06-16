@@ -25,6 +25,7 @@ import type {
   AdminRepository,
   CatalogRepository,
   EntitlementRepository,
+  FavoritesRepository,
   ObjectStore,
   OrgRepository,
   PackageUploadService,
@@ -39,6 +40,7 @@ import {
   setKitPricingRequestSchema,
   grantEntitlementRequestSchema,
   licensedPackageRequestSchema,
+  addFavoriteRequestSchema,
 } from '@agentkitforge/contracts';
 import {
   resolveKitPricingUpdate,
@@ -279,6 +281,21 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/licensed-package') {
         return withEntitlementRepo(request, allowedOrigins, entitlementRepository, (repo) => licensedPackageHandler(request, adminRepository, repo, deps.objectStore, allowedOrigins));
+      }
+
+      // --- Favorites (cloud-synced kit references, Seam B) ---
+      const favoritesRepository = deps.favoritesRepository;
+
+      if (request.method === 'GET' && request.resource === '/admin/users/{userId}/favorites') {
+        return withFavoritesRepo(request, allowedOrigins, favoritesRepository, (repo) => listFavoritesHandler(request, repo, allowedOrigins));
+      }
+
+      if (request.method === 'POST' && request.resource === '/admin/users/{userId}/favorites') {
+        return withFavoritesRepo(request, allowedOrigins, favoritesRepository, (repo) => addFavoriteHandler(request, adminRepository, repo, allowedOrigins));
+      }
+
+      if (request.method === 'DELETE' && request.resource === '/admin/users/{userId}/favorites/{kitId}') {
+        return withFavoritesRepo(request, allowedOrigins, favoritesRepository, (repo) => removeFavoriteHandler(request, repo, allowedOrigins));
       }
     }
 
@@ -1320,6 +1337,87 @@ function withEntitlementRepo(
     }));
   }
   return handler(entitlementRepository);
+}
+
+function withFavoritesRepo(
+  request: CoreRequest,
+  allowedOrigins: string[],
+  favoritesRepository: FavoritesRepository | undefined,
+  handler: (repo: FavoritesRepository) => Promise<CoreResponse>,
+): Promise<CoreResponse> {
+  if (!favoritesRepository) {
+    return Promise.resolve(json(request, allowedOrigins, 500, {
+      message: 'Favorites are not configured',
+    }));
+  }
+  return handler(favoritesRepository);
+}
+
+/** GET /admin/users/{userId}/favorites — the user's cloud-synced favorites. */
+async function listFavoritesHandler(
+  request: CoreRequest,
+  repo: FavoritesRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const userId = request.pathParameters?.userId;
+  if (!userId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing userId' });
+  }
+  const items = await repo.listFavorites(userId);
+  return json(request, allowedOrigins, 200, { items });
+}
+
+/**
+ * POST /admin/users/{userId}/favorites — body {slug|kitId}. Resolves the
+ * reference to a real Market kit, then stores the favorite with best-effort
+ * cached display metadata. Idempotent on (userId, kitId).
+ */
+async function addFavoriteHandler(
+  request: CoreRequest,
+  adminRepository: AdminRepository,
+  repo: FavoritesRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const userId = request.pathParameters?.userId;
+  if (!userId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing userId' });
+  }
+  const parsed = addFavoriteRequestSchema.safeParse(parseJsonBody(request));
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Either slug or kitId is required.' });
+  }
+
+  // Resolve {slug|kitId} to a real kit. kitId takes precedence when supplied.
+  const kit = parsed.data.kitId
+    ? await adminRepository.getKit(parsed.data.kitId)
+    : await adminRepository.getKitBySlug(parsed.data.slug as string);
+  if (!kit) {
+    return json(request, allowedOrigins, 404, { message: 'Kit not found' });
+  }
+
+  const favorite = await repo.addFavorite(userId, {
+    kitId: kit.kitId,
+    slug: kit.slug,
+    displayName: kit.name,
+    summary: kit.summary,
+    publisherName: kit.publisherId,
+  });
+  return json(request, allowedOrigins, 201, { item: favorite });
+}
+
+/** DELETE /admin/users/{userId}/favorites/{kitId}. Idempotent. */
+async function removeFavoriteHandler(
+  request: CoreRequest,
+  repo: FavoritesRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const userId = request.pathParameters?.userId;
+  const kitId = request.pathParameters?.kitId;
+  if (!userId || !kitId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing userId or kitId' });
+  }
+  await repo.removeFavorite(userId, kitId);
+  return json(request, allowedOrigins, 200, { ok: true, kitId });
 }
 
 /**

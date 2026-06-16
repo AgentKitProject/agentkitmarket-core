@@ -236,3 +236,21 @@ CREATE TABLE IF NOT EXISTS entitlements (
 );
 
 CREATE INDEX IF NOT EXISTS entitlements_kit_id_idx ON entitlements (kit_id);
+
+-- === Favorites (cloud-synced kit references) ==================================
+-- Dynamo FavoritesTable: PK userId / SK kitId. Mirrored here as PK
+-- (user_id, kit_id) + index on user_id. References to a Market kit, never a
+-- kit copy; cached display metadata is best-effort.
+
+CREATE TABLE IF NOT EXISTS favorites (
+  user_id        text NOT NULL,
+  kit_id         text NOT NULL,
+  slug           text NOT NULL,
+  added_at       text NOT NULL,
+  display_name   text,
+  summary        text,
+  publisher_name text,
+  PRIMARY KEY (user_id, kit_id)
+);
+
+CREATE INDEX IF NOT EXISTS favorites_user_id_idx ON favorites (user_id);

@@ -52,6 +52,10 @@ const ROUTES: RoutePattern[] = [
   { method: 'GET', template: '/admin/kits/{kitId}/entitlements/{userId}' },
   { method: 'POST', template: '/admin/kits/{kitId}/entitlements' },
   { method: 'POST', template: '/admin/kits/{kitId}/licensed-package' },
+  // Favorites (cloud-synced kit references, Seam B).
+  { method: 'GET', template: '/admin/users/{userId}/favorites' },
+  { method: 'POST', template: '/admin/users/{userId}/favorites' },
+  { method: 'DELETE', template: '/admin/users/{userId}/favorites/{kitId}' },
 ];
 
 export interface MatchedRoute {

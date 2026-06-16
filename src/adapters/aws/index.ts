@@ -30,6 +30,7 @@ import type {
   AdminRepository,
   CatalogRepository,
   EntitlementRepository,
+  FavoritesRepository,
   KitPricingUpdate,
   ObjectStore,
   OrgRepository,
@@ -38,11 +39,13 @@ import type {
   ValidationJobUpdate,
 } from '../../core/ports.js';
 import type {
+  AddFavoriteInput,
   CatalogDetail,
   CatalogPage,
   CreateSubmissionInput,
   CreateSubmissionResult,
   Entitlement,
+  Favorite,
   GrantEntitlementInput,
   KitRecord,
   KitVersionRecord,
@@ -1155,6 +1158,66 @@ export function createDynamoEntitlementRepository(config: DynamoEntitlementConfi
         ExpressionAttributeValues: { ':kitId': kitId },
       }));
       return (result.Items ?? []).filter(isEntitlement).sort((a, b) => a.grantedAt.localeCompare(b.grantedAt));
+    },
+  };
+}
+
+/** Config for the DynamoDB favorites repository. */
+export interface DynamoFavoritesConfig {
+  favoritesTableName: string;
+  /** Optional client overrides (dynamodb-local). Omit for hosted. */
+  client?: DynamoClientOverrides;
+}
+
+function isFavorite(item: unknown): item is Favorite {
+  return typeof item === 'object' && item !== null
+    && typeof (item as { userId?: unknown }).userId === 'string'
+    && typeof (item as { kitId?: unknown }).kitId === 'string';
+}
+
+/**
+ * DynamoDB favorites repository. PK userId / SK kitId. Idempotent add on
+ * (userId,kitId): re-adding refreshes cached metadata but preserves addedAt.
+ */
+export function createDynamoFavoritesRepository(config: DynamoFavoritesConfig): FavoritesRepository {
+  const { favoritesTableName } = config;
+  const dynamo = buildDynamoDocumentClient(config.client);
+
+  return {
+    async addFavorite(userId: string, input: AddFavoriteInput): Promise<Favorite> {
+      const existing = await dynamo.send(new GetCommand({
+        TableName: favoritesTableName,
+        Key: { userId, kitId: input.kitId },
+      }));
+      const prior = isFavorite(existing.Item) ? existing.Item : undefined;
+      const now = new Date().toISOString();
+      const favorite: Favorite = {
+        userId,
+        kitId: input.kitId,
+        slug: input.slug,
+        addedAt: prior?.addedAt ?? now,
+        displayName: input.displayName,
+        summary: input.summary,
+        publisherName: input.publisherName,
+      };
+      await dynamo.send(new PutCommand({ TableName: favoritesTableName, Item: favorite }));
+      return favorite;
+    },
+
+    async listFavorites(userId: string): Promise<Favorite[]> {
+      const result = await dynamo.send(new QueryCommand({
+        TableName: favoritesTableName,
+        KeyConditionExpression: 'userId = :userId',
+        ExpressionAttributeValues: { ':userId': userId },
+      }));
+      return (result.Items ?? []).filter(isFavorite).sort((a, b) => a.addedAt.localeCompare(b.addedAt));
+    },
+
+    async removeFavorite(userId: string, kitId: string): Promise<void> {
+      await dynamo.send(new DeleteCommand({
+        TableName: favoritesTableName,
+        Key: { userId, kitId },
+      }));
     },
   };
 }

@@ -36,6 +36,7 @@ import {
   createDynamoAdminRepository,
   createDynamoOrgRepository,
   createDynamoEntitlementRepository,
+  createDynamoFavoritesRepository,
   type DynamoClientOverrides,
 } from '../src/adapters/aws/index.js';
 import { runRepositoryContract, type ContractRepos } from './repository-contract.js';
@@ -52,6 +53,7 @@ const TABLES = {
   orgMemberships: 'OrgMemberships',
   orgInvites: 'OrgInvites',
   entitlements: 'Entitlements',
+  favorites: 'Favorites',
 } as const;
 
 const S = 'S' as const;
@@ -227,6 +229,19 @@ const TABLE_DEFINITIONS: CreateTableCommandInput[] = [
       },
     ],
   },
+  {
+    // Favorites: PK userId / SK kitId.
+    TableName: TABLES.favorites,
+    BillingMode: 'PAY_PER_REQUEST',
+    KeySchema: [
+      { AttributeName: 'userId', KeyType: 'HASH' },
+      { AttributeName: 'kitId', KeyType: 'RANGE' },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'userId', AttributeType: S },
+      { AttributeName: 'kitId', AttributeType: S },
+    ],
+  },
 ];
 
 if (!endpoint) {
@@ -293,6 +308,10 @@ if (!endpoint) {
       entitlementsTableName: TABLES.entitlements,
       client: overrides,
     });
+    const favorites = createDynamoFavoritesRepository({
+      favoritesTableName: TABLES.favorites,
+      client: overrides,
+    });
 
     // Recreate tables per reset for a clean slate each test.
     const reset = async (): Promise<void> => {
@@ -300,6 +319,6 @@ if (!endpoint) {
       await createAllTables();
     };
 
-    return { catalog, admin, org, entitlement, reset };
+    return { catalog, admin, org, entitlement, favorites, reset };
   });
 }
