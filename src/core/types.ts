@@ -83,6 +83,17 @@ export interface Organization {
   verified?: boolean;
   /** WorkOS Organization ID — null until SSO is configured (future). */
   workosOrganizationId?: string | null;
+  /**
+   * Stripe Connect seller-payout fields. Stored/returned by core only; all Stripe
+   * API calls (account create, account links, account.updated) live in market-app.
+   * `stripeAccountId` is the org's Express connected-account id; chargesEnabled/
+   * payoutsEnabled mirror the connected account's capability state; payoutOnboardedAt
+   * is stamped the first time payouts become enabled.
+   */
+  stripeAccountId?: string;
+  chargesEnabled?: boolean;
+  payoutsEnabled?: boolean;
+  payoutOnboardedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

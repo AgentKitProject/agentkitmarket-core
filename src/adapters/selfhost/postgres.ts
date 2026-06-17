@@ -242,6 +242,10 @@ function rowToOrganization(row: any): Organization {
     avatarInitials: str(row.avatar_initials),
     verified: row.verified === null || row.verified === undefined ? undefined : row.verified,
     workosOrganizationId: row.workos_organization_id ?? undefined,
+    stripeAccountId: str(row.stripe_account_id),
+    chargesEnabled: row.charges_enabled === null || row.charges_enabled === undefined ? undefined : row.charges_enabled,
+    payoutsEnabled: row.payouts_enabled === null || row.payouts_enabled === undefined ? undefined : row.payouts_enabled,
+    payoutOnboardedAt: str(row.payout_onboarded_at),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1104,6 +1108,38 @@ export function createPostgresOrgRepository(pool: PgPool): OrgRepository {
       await pool.query(`DELETE FROM org_invites WHERE org_id = $1`, [orgId]);
       await pool.query(`DELETE FROM org_memberships WHERE org_id = $1`, [orgId]);
       await pool.query(`DELETE FROM organizations WHERE org_id = $1`, [orgId]);
+    },
+
+    async setOrgStripeAccount(orgId, fields): Promise<Organization | undefined> {
+      // payout_onboarded_at is stamped only when provided and not already set
+      // (COALESCE keeps the first-enabled timestamp stable across updates).
+      const result = await pool.query(
+        `UPDATE organizations
+           SET stripe_account_id = $2,
+               charges_enabled = $3,
+               payouts_enabled = $4,
+               payout_onboarded_at = COALESCE(payout_onboarded_at, $5),
+               updated_at = $6
+         WHERE org_id = $1
+         RETURNING *`,
+        [
+          orgId,
+          fields.stripeAccountId,
+          fields.chargesEnabled,
+          fields.payoutsEnabled,
+          fields.payoutOnboardedAt ?? null,
+          new Date().toISOString(),
+        ],
+      );
+      return result.rows[0] ? rowToOrganization(result.rows[0]) : undefined;
+    },
+
+    async getOrgByStripeAccountId(stripeAccountId): Promise<Organization | undefined> {
+      const result = await pool.query(
+        `SELECT * FROM organizations WHERE stripe_account_id = $1 LIMIT 1`,
+        [stripeAccountId],
+      );
+      return result.rows[0] ? rowToOrganization(result.rows[0]) : undefined;
     },
 
     async setKitOwnerOrg(kitId: string, orgId: string): Promise<KitRecord | undefined> {

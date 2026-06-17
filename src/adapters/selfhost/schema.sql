@@ -183,13 +183,25 @@ CREATE TABLE IF NOT EXISTS organizations (
   avatar_initials        text,
   verified               boolean,
   workos_organization_id text,
+  stripe_account_id      text,
+  charges_enabled        boolean,
+  payouts_enabled        boolean,
+  payout_onboarded_at    text,
   created_at             text NOT NULL,
   updated_at             text NOT NULL
 );
 
+-- Stripe Connect seller-payout columns, upgrade-safe for pre-existing tables.
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS stripe_account_id text;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS charges_enabled boolean;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS payouts_enabled boolean;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS payout_onboarded_at text;
+
 -- Dynamo Organizations had a unique slug-index GSI and an ownerUserId-index GSI.
 CREATE UNIQUE INDEX IF NOT EXISTS organizations_slug_uidx ON organizations (slug);
 CREATE INDEX IF NOT EXISTS organizations_owner_user_id_idx ON organizations (owner_user_id);
+-- Reverse lookup for the Stripe account.updated webhook (mirrors Dynamo stripeAccountId-index).
+CREATE INDEX IF NOT EXISTS organizations_stripe_account_id_idx ON organizations (stripe_account_id);
 
 CREATE TABLE IF NOT EXISTS org_memberships (
   org_id             text NOT NULL,

@@ -1029,6 +1029,53 @@ export function createDynamoOrgRepository(config: DynamoOrgConfig): OrgRepositor
       await dynamo.send(new DeleteCommand({ TableName: organizationsTableName, Key: { orgId } }));
     },
 
+    async setOrgStripeAccount(orgId, fields): Promise<Organization | undefined> {
+      const existing = await dynamo.send(new GetCommand({ TableName: organizationsTableName, Key: { orgId } }));
+      if (!isOrganization(existing.Item)) {
+        return undefined;
+      }
+      const setParts = [
+        'stripeAccountId = :acct',
+        'chargesEnabled = :charges',
+        'payoutsEnabled = :payouts',
+        'updatedAt = :updatedAt',
+      ];
+      const values: Record<string, unknown> = {
+        ':acct': fields.stripeAccountId,
+        ':charges': fields.chargesEnabled,
+        ':payouts': fields.payoutsEnabled,
+        ':updatedAt': new Date().toISOString(),
+      };
+      // Stamp payoutOnboardedAt only when the caller supplies it (first time
+      // payouts become enabled). Never overwrite an existing value with null.
+      if (fields.payoutOnboardedAt) {
+        setParts.push('payoutOnboardedAt = if_not_exists(payoutOnboardedAt, :onboardedAt)');
+        values[':onboardedAt'] = fields.payoutOnboardedAt;
+      }
+      const result = await dynamo.send(new UpdateCommand({
+        TableName: organizationsTableName,
+        Key: { orgId },
+        UpdateExpression: `SET ${setParts.join(', ')}`,
+        ExpressionAttributeValues: values,
+        ReturnValues: 'ALL_NEW',
+      }));
+      return isOrganization(result.Attributes) ? result.Attributes : undefined;
+    },
+
+    async getOrgByStripeAccountId(stripeAccountId): Promise<Organization | undefined> {
+      // Reverse lookup for the account.updated webhook. Uses the
+      // stripeAccountId-index GSI (mirrors slug-index); the index is sparse
+      // (only orgs that began onboarding carry stripeAccountId).
+      const result = await dynamo.send(new QueryCommand({
+        TableName: organizationsTableName,
+        IndexName: 'stripeAccountId-index',
+        KeyConditionExpression: 'stripeAccountId = :acct',
+        ExpressionAttributeValues: { ':acct': stripeAccountId },
+        Limit: 1,
+      }));
+      return (result.Items ?? []).filter(isOrganization)[0];
+    },
+
     async setKitOwnerOrg(kitId: string, orgId: string): Promise<KitRecord | undefined> {
       const existing = await dynamo.send(new GetCommand({ TableName: kitsTableName, Key: { kitId } }));
       if (!isKitRecord(existing.Item)) {

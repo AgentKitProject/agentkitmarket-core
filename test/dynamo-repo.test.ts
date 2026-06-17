@@ -159,6 +159,7 @@ const TABLE_DEFINITIONS: CreateTableCommandInput[] = [
       { AttributeName: 'orgId', AttributeType: S },
       { AttributeName: 'slug', AttributeType: S },
       { AttributeName: 'ownerUserId', AttributeType: S },
+      { AttributeName: 'stripeAccountId', AttributeType: S },
     ],
     GlobalSecondaryIndexes: [
       {
@@ -169,6 +170,11 @@ const TABLE_DEFINITIONS: CreateTableCommandInput[] = [
       {
         IndexName: 'ownerUserId-index',
         KeySchema: [{ AttributeName: 'ownerUserId', KeyType: 'HASH' }],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'stripeAccountId-index',
+        KeySchema: [{ AttributeName: 'stripeAccountId', KeyType: 'HASH' }],
         Projection: { ProjectionType: 'ALL' },
       },
     ],

@@ -594,6 +594,52 @@ export function runRepositoryContract(name: string, makeRepos: MakeRepos): void 
         expect(await org().setKitOwnerOrg('kit_nope', target.orgId)).toBeUndefined();
       });
 
+      it('setOrgStripeAccount persists payout fields + getOrgByStripeAccountId round-trips', async () => {
+        const created = await org().createOrg({ displayName: 'Payout Org', ownerUserId: 'u_pay' });
+        // Fresh org has no payout fields.
+        expect(created.stripeAccountId).toBeUndefined();
+        expect((await org().getOrgByStripeAccountId('acct_missing'))).toBeUndefined();
+
+        // First write: charges on, payouts not yet enabled — no payoutOnboardedAt.
+        const first = await org().setOrgStripeAccount(created.orgId, {
+          stripeAccountId: 'acct_pay_1',
+          chargesEnabled: true,
+          payoutsEnabled: false,
+        });
+        expect(first?.stripeAccountId).toBe('acct_pay_1');
+        expect(first?.chargesEnabled).toBe(true);
+        expect(first?.payoutsEnabled).toBe(false);
+        expect(first?.payoutOnboardedAt).toBeUndefined();
+
+        // Reverse lookup finds it.
+        expect((await org().getOrgByStripeAccountId('acct_pay_1'))?.orgId).toBe(created.orgId);
+
+        // Second write enables payouts and stamps payoutOnboardedAt.
+        const onboardedAt = '2026-06-16T12:00:00.000Z';
+        const second = await org().setOrgStripeAccount(created.orgId, {
+          stripeAccountId: 'acct_pay_1',
+          chargesEnabled: true,
+          payoutsEnabled: true,
+          payoutOnboardedAt: onboardedAt,
+        });
+        expect(second?.payoutsEnabled).toBe(true);
+        expect(second?.payoutOnboardedAt).toBe(onboardedAt);
+
+        // Third write keeps the first payoutOnboardedAt stable.
+        const third = await org().setOrgStripeAccount(created.orgId, {
+          stripeAccountId: 'acct_pay_1',
+          chargesEnabled: true,
+          payoutsEnabled: true,
+          payoutOnboardedAt: '2027-01-01T00:00:00.000Z',
+        });
+        expect(third?.payoutOnboardedAt).toBe(onboardedAt);
+
+        // Missing org returns undefined.
+        expect(await org().setOrgStripeAccount('org_nope', {
+          stripeAccountId: 'acct_x', chargesEnabled: true, payoutsEnabled: true,
+        })).toBeUndefined();
+      });
+
       it('setKitVisibility=private hides a kit from the public catalog', async () => {
         const kitId = await publishKit(baseInput());
         // Visible by default.

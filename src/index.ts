@@ -22,6 +22,7 @@ export type {
   ValidationJobUpdate,
   SubmissionValidationUpdate,
   KitPricingUpdate,
+  OrgStripeAccountFields,
 } from "./core/ports.js";
 
 // Config + validation service (cloud-free) — usable by both runtimes.

@@ -127,10 +127,28 @@ export interface OrgRepository {
   removeMember(orgId: string, userId: string): Promise<void>;
   /** Hard-deletes an org and all its memberships + invites. Caller enforces guards. */
   deleteOrg(orgId: string): Promise<void>;
+  /**
+   * Persists Stripe Connect seller-payout fields on an org. Core never calls
+   * Stripe; market-app resolves these from the Stripe API (account create /
+   * account.updated) and passes them in. payoutOnboardedAt is stamped by the
+   * caller (market-app) the first time payouts become enabled.
+   */
+  setOrgStripeAccount(orgId: string, fields: OrgStripeAccountFields): Promise<Organization | undefined>;
+  /** Reverse lookup for the Stripe account.updated webhook. */
+  getOrgByStripeAccountId(stripeAccountId: string): Promise<Organization | undefined>;
   setKitOwnerOrg(kitId: string, orgId: string): Promise<KitRecord | undefined>;
   setKitVisibility(kitId: string, visibility: KitVisibility): Promise<KitRecord | undefined>;
   /** All kits owned by an org, including private ones (for the org's own listing). */
   listKitsForOrg(orgId: string): Promise<KitRecord[]>;
+}
+
+/** Stripe Connect seller-payout fields to persist on an org (set by market-app). */
+export interface OrgStripeAccountFields {
+  stripeAccountId: string;
+  chargesEnabled: boolean;
+  payoutsEnabled: boolean;
+  /** Stamped by the caller the first time payouts become enabled. */
+  payoutOnboardedAt?: string;
 }
 
 /**

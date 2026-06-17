@@ -46,6 +46,10 @@ export const ROUTES: RoutePattern[] = [
   { method: 'POST', template: '/admin/orgs/{orgId}/invites/{userId}/accept' },
   { method: 'POST', template: '/admin/kits/{kitId}/transfer' },
   { method: 'POST', template: '/admin/kits/{kitId}/visibility' },
+  // Stripe Connect seller payouts (Market paid-kit payouts, Seam B).
+  { method: 'POST', template: '/admin/orgs/{orgId}/stripe-account' },
+  { method: 'GET', template: '/admin/orgs/{orgId}/payout-status' },
+  { method: 'GET', template: '/admin/orgs/by-stripe-account/{stripeAccountId}' },
   // Tier-2 paid/licensed kits (Seam B).
   { method: 'POST', template: '/admin/kits/{kitId}/pricing' },
   { method: 'GET', template: '/admin/users/{userId}/entitlements' },

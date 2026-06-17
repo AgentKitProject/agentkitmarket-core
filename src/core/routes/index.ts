@@ -41,6 +41,7 @@ import {
   createOrgRequestSchema,
   removeOrgMemberRequestSchema,
   setKitVisibilityRequestSchema,
+  setOrgStripeAccountRequestSchema,
   transferKitRequestSchema,
   setKitPricingRequestSchema,
   grantEntitlementRequestSchema,
@@ -323,6 +324,21 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
             const visibility = typeof b?.visibility === 'string' ? (b.visibility as string) : null;
             return { action: 'kit.visibility_set', targetType: 'kit', targetId: kitId, metadata: { visibility } };
           });
+      }
+
+      // --- Stripe Connect seller payouts (Seam B) ---
+      // Core only stores/returns the Stripe fields + ids; market-app owns all
+      // Stripe API calls (account create, account links, account.updated).
+      if (request.method === 'POST' && request.resource === '/admin/orgs/{orgId}/stripe-account') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => setOrgStripeAccountHandler(request, repo, allowedOrigins));
+      }
+
+      if (request.method === 'GET' && request.resource === '/admin/orgs/{orgId}/payout-status') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => getOrgPayoutStatusHandler(request, repo, allowedOrigins));
+      }
+
+      if (request.method === 'GET' && request.resource === '/admin/orgs/by-stripe-account/{stripeAccountId}') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => getOrgByStripeAccountHandler(request, repo, allowedOrigins));
       }
 
       // --- Tier-2 paid/licensed kits (Seam B) ---
@@ -1413,6 +1429,86 @@ async function setKitVisibilityHandler(
   return json(request, allowedOrigins, 200, {
     item: { kitId, visibility: updated?.visibility ?? parsed.data.visibility, updatedAt: updated?.updatedAt ?? null },
   });
+}
+
+// --- Stripe Connect seller payouts ----------------------------------------------
+
+/**
+ * POST /admin/orgs/{orgId}/stripe-account. Persists the org's Stripe Connect
+ * payout fields. market-app resolves these from Stripe (account create /
+ * account.updated) and passes them in; core never calls Stripe. The caller
+ * supplies payoutOnboardedAt the first time payouts become enabled — the
+ * repository keeps the first-set value stable on later updates.
+ */
+async function setOrgStripeAccountHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const orgId = request.pathParameters?.orgId;
+  if (!orgId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing orgId' });
+  }
+  const parsed = setOrgStripeAccountRequestSchema.safeParse(parseJsonBody(request));
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid stripe-account payload' });
+  }
+  const org = await orgRepository.getOrg(orgId);
+  if (!org) {
+    return json(request, allowedOrigins, 404, { message: 'Organization not found' });
+  }
+  const updated = await orgRepository.setOrgStripeAccount(orgId, {
+    stripeAccountId: parsed.data.stripeAccountId,
+    chargesEnabled: parsed.data.chargesEnabled,
+    payoutsEnabled: parsed.data.payoutsEnabled,
+    payoutOnboardedAt: parsed.data.payoutOnboardedAt,
+  });
+  return json(request, allowedOrigins, 200, { item: payoutStatusBody(updated ?? org) });
+}
+
+/** GET /admin/orgs/{orgId}/payout-status — the org's stored Stripe payout fields. */
+async function getOrgPayoutStatusHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const orgId = request.pathParameters?.orgId;
+  if (!orgId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing orgId' });
+  }
+  const org = await orgRepository.getOrg(orgId);
+  if (!org) {
+    return json(request, allowedOrigins, 404, { message: 'Organization not found' });
+  }
+  return json(request, allowedOrigins, 200, { item: payoutStatusBody(org) });
+}
+
+/** GET /admin/orgs/by-stripe-account/{stripeAccountId} — reverse lookup for account.updated. */
+async function getOrgByStripeAccountHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const stripeAccountId = request.pathParameters?.stripeAccountId;
+  if (!stripeAccountId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing stripeAccountId' });
+  }
+  const org = await orgRepository.getOrgByStripeAccountId(stripeAccountId);
+  if (!org) {
+    return json(request, allowedOrigins, 404, { message: 'Organization not found' });
+  }
+  return json(request, allowedOrigins, 200, { item: org });
+}
+
+function payoutStatusBody(org: { orgId: string; stripeAccountId?: string; chargesEnabled?: boolean; payoutsEnabled?: boolean; payoutOnboardedAt?: string; updatedAt?: string }) {
+  return {
+    orgId: org.orgId,
+    stripeAccountId: org.stripeAccountId ?? null,
+    chargesEnabled: org.chargesEnabled ?? false,
+    payoutsEnabled: org.payoutsEnabled ?? false,
+    payoutOnboardedAt: org.payoutOnboardedAt ?? null,
+    updatedAt: org.updatedAt ?? null,
+  };
 }
 
 // --- Tier-2 paid/licensed kits --------------------------------------------------
