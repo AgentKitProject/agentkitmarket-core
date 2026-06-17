@@ -19,6 +19,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   AdminRepository,
+  AuditRepository,
   CatalogRepository,
   EntitlementRepository,
   FavoritesRepository,
@@ -29,6 +30,11 @@ import type {
 } from '../../core/ports.js';
 import type {
   AddFavoriteInput,
+  AuditEvent,
+  AuditMetadata,
+  AuditPage,
+  ListAuditInput,
+  RecordAuditInput,
   CatalogDetail,
   CatalogPage,
   CreateSubmissionInput,
@@ -1239,6 +1245,88 @@ export function createPostgresFavoritesRepository(pool: PgPool): FavoritesReposi
         `DELETE FROM favorites WHERE user_id = $1 AND kit_id = $2`,
         [userId, kitId],
       );
+    },
+  };
+}
+
+function rowToAuditEvent(row: Record<string, unknown>): AuditEvent {
+  const ts = row.timestamp;
+  return {
+    auditId: row.audit_id as string,
+    timestamp: ts instanceof Date ? ts.toISOString() : String(ts),
+    actorUserId: row.actor_user_id as string,
+    actorEmail: (row.actor_email as string | null) ?? undefined,
+    actorType: row.actor_type as AuditEvent['actorType'],
+    action: row.action as AuditEvent['action'],
+    targetType: row.target_type as AuditEvent['targetType'],
+    targetId: row.target_id as string,
+    orgId: (row.org_id as string | null) ?? undefined,
+    metadata: (row.metadata as AuditMetadata | null) ?? undefined,
+    ip: (row.ip as string | null) ?? undefined,
+  };
+}
+
+/**
+ * Postgres audit-log repository (append-only). Mirrors the DynamoDB adapter:
+ * newest-first list with optional filters (actor, target, action, time range)
+ * and deterministic offset pagination.
+ */
+export function createPostgresAuditRepository(pool: PgPool): AuditRepository {
+  return {
+    async record(input: RecordAuditInput): Promise<AuditEvent> {
+      const auditId = `aud_${randomUUID()}`;
+      const result = await pool.query(
+        `INSERT INTO audit_logs
+           (audit_id, timestamp, actor_user_id, actor_email, actor_type, action,
+            target_type, target_id, org_id, metadata, ip)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING *`,
+        [
+          auditId,
+          input.timestamp,
+          input.actorUserId,
+          input.actorEmail ?? null,
+          input.actorType,
+          input.action,
+          input.targetType,
+          input.targetId,
+          input.orgId ?? null,
+          input.metadata ? JSON.stringify(input.metadata) : null,
+          input.ip ?? null,
+        ],
+      );
+      return rowToAuditEvent(result.rows[0]);
+    },
+
+    async list(input: ListAuditInput): Promise<AuditPage> {
+      const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+      const offset = decodeOffset(input.nextToken);
+      const conds: string[] = [];
+      const params: unknown[] = [];
+      const add = (sql: string, value: unknown) => {
+        params.push(value);
+        conds.push(sql.replace('$?', `$${params.length}`));
+      };
+      if (input.actorUserId) add('actor_user_id = $?', input.actorUserId);
+      if (input.targetType) add('target_type = $?', input.targetType);
+      if (input.targetId) add('target_id = $?', input.targetId);
+      if (input.action) add('action = $?', input.action);
+      if (input.since) add('timestamp >= $?', input.since);
+      if (input.until) add('timestamp <= $?', input.until);
+      const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+      params.push(limit + 1);
+      const limitIdx = params.length;
+      params.push(offset);
+      const offsetIdx = params.length;
+      const result = await pool.query(
+        `SELECT * FROM audit_logs ${where}
+         ORDER BY timestamp DESC, audit_id DESC
+         LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        params,
+      );
+      const rows = result.rows.slice(0, limit).map(rowToAuditEvent);
+      const hasMore = result.rows.length > limit;
+      return { items: rows, nextToken: hasMore ? encodeOffset(offset + limit) : undefined };
     },
   };
 }

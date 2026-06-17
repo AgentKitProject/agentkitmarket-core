@@ -20,9 +20,14 @@ import type {
   OrgRole,
   PublisherRecord,
   SubmissionRecord,
+  AuditAction,
+  AuditActorType,
+  AuditMetadata,
+  AuditTargetType,
 } from '../types.js';
 import type {
   AdminRepository,
+  AuditRepository,
   CatalogRepository,
   EntitlementRepository,
   FavoritesRepository,
@@ -161,27 +166,42 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
       }
 
       if (request.method === 'POST' && request.resource === '/admin/submissions/{submissionId}/approve') {
-        return approveAdminSubmission(request, adminRepository, allowedOrigins);
+        const submissionId = request.pathParameters?.submissionId ?? '';
+        return withAudit(deps, request, () => approveAdminSubmission(request, adminRepository, allowedOrigins),
+          () => ({ action: 'submission.approved', targetType: 'submission', targetId: submissionId, actorType: 'admin' }));
       }
 
       if (request.method === 'POST' && request.resource === '/admin/submissions/{submissionId}/reject') {
-        return rejectAdminSubmission(request, adminRepository, allowedOrigins);
+        const submissionId = request.pathParameters?.submissionId ?? '';
+        return withAudit(deps, request, () => rejectAdminSubmission(request, adminRepository, allowedOrigins),
+          () => ({ action: 'submission.rejected', targetType: 'submission', targetId: submissionId, actorType: 'admin' }));
       }
 
       if (request.method === 'POST' && request.resource === '/admin/submissions/{submissionId}/archive') {
-        return archiveAdminSubmission(request, adminRepository, allowedOrigins);
+        const submissionId = request.pathParameters?.submissionId ?? '';
+        return withAudit(deps, request, () => archiveAdminSubmission(request, adminRepository, allowedOrigins),
+          () => ({ action: 'submission.archived', targetType: 'submission', targetId: submissionId, actorType: 'admin' }));
       }
 
       if (request.method === 'POST' && request.resource === '/admin/submissions/{submissionId}/remove') {
-        return archiveAdminSubmission(request, adminRepository, allowedOrigins);
+        const submissionId = request.pathParameters?.submissionId ?? '';
+        return withAudit(deps, request, () => archiveAdminSubmission(request, adminRepository, allowedOrigins),
+          () => ({ action: 'submission.archived', targetType: 'submission', targetId: submissionId, actorType: 'admin' }));
       }
 
       if (request.method === 'POST' && request.resource === '/users/submissions/{submissionId}/cancel') {
-        return cancelOwnSubmission(request, adminRepository, allowedOrigins);
+        const submissionId = request.pathParameters?.submissionId ?? '';
+        return withAudit(deps, request, () => cancelOwnSubmission(request, adminRepository, allowedOrigins),
+          () => ({ action: 'submission.canceled', targetType: 'submission', targetId: submissionId }));
       }
 
       if (request.method === 'POST' && request.resource === '/admin/submissions/{submissionId}/publish') {
-        return publishAdminSubmission(request, adminRepository, allowedOrigins, deps.orgRepository);
+        const submissionId = request.pathParameters?.submissionId ?? '';
+        return withAudit(deps, request, () => publishAdminSubmission(request, adminRepository, allowedOrigins, deps.orgRepository),
+          (body) => {
+            const kitId = (body as { item?: { kitId?: string } })?.item?.kitId;
+            return { action: 'submission.published', targetType: 'submission', targetId: submissionId, actorType: 'admin', metadata: { kitId: kitId ?? null } };
+          });
       }
 
       if (request.method === 'GET' && request.resource === '/admin/submissions') {
@@ -193,19 +213,27 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
       }
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/hide') {
-        return hideAdminKit(request, adminRepository, allowedOrigins);
+        const kitId = request.pathParameters?.kitId ?? '';
+        return withAudit(deps, request, () => hideAdminKit(request, adminRepository, allowedOrigins),
+          () => ({ action: 'kit.hidden', targetType: 'kit', targetId: kitId, actorType: 'admin' }));
       }
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/unhide') {
-        return unhideAdminKit(request, adminRepository, allowedOrigins);
+        const kitId = request.pathParameters?.kitId ?? '';
+        return withAudit(deps, request, () => unhideAdminKit(request, adminRepository, allowedOrigins),
+          () => ({ action: 'kit.unhidden', targetType: 'kit', targetId: kitId, actorType: 'admin' }));
       }
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/remove') {
-        return removeAdminKit(request, adminRepository, allowedOrigins);
+        const kitId = request.pathParameters?.kitId ?? '';
+        return withAudit(deps, request, () => removeAdminKit(request, adminRepository, allowedOrigins),
+          () => ({ action: 'kit.removed', targetType: 'kit', targetId: kitId, actorType: 'admin' }));
       }
 
       if (request.method === 'POST' && request.resource === '/users/kits/{kitId}/remove') {
-        return removeOwnKit(request, adminRepository, allowedOrigins, deps.orgRepository);
+        const kitId = request.pathParameters?.kitId ?? '';
+        return withAudit(deps, request, () => removeOwnKit(request, adminRepository, allowedOrigins, deps.orgRepository),
+          () => ({ action: 'kit.removed', targetType: 'kit', targetId: kitId }));
       }
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/download-url') {
@@ -219,12 +247,21 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
       // --- Organizations (Market Phase 2, Seam B) ---
       const orgRepository = deps.orgRepository;
 
+      const auditBody = () => parseJsonBody(request) as Record<string, unknown> | undefined;
+
       if (request.method === 'POST' && request.resource === '/admin/orgs') {
-        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => createOrgHandler(request, repo, allowedOrigins));
+        return withAudit(deps, request, () => withOrgRepo(request, allowedOrigins, orgRepository, (repo) => createOrgHandler(request, repo, allowedOrigins)),
+          (body) => {
+            const orgId = (body as { item?: { orgId?: string } })?.item?.orgId;
+            const actor = typeof auditBody()?.ownerUserId === 'string' ? (auditBody()!.ownerUserId as string) : undefined;
+            return orgId ? { action: 'org.created', targetType: 'org', targetId: orgId, orgId, actorUserId: actor } : undefined;
+          });
       }
 
       if (request.method === 'DELETE' && request.resource === '/admin/orgs/{orgId}') {
-        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => deleteOrgHandler(request, adminRepository, repo, allowedOrigins));
+        const orgId = request.pathParameters?.orgId ?? '';
+        return withAudit(deps, request, () => withOrgRepo(request, allowedOrigins, orgRepository, (repo) => deleteOrgHandler(request, adminRepository, repo, allowedOrigins)),
+          () => ({ action: 'org.deleted', targetType: 'org', targetId: orgId, orgId }));
       }
 
       if (request.method === 'GET' && request.resource === '/admin/users/{userId}/orgs') {
@@ -236,12 +273,24 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
           return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => listMembersHandler(request, repo, allowedOrigins));
         }
         if (request.method === 'POST') {
-          return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => addMemberHandler(request, repo, allowedOrigins));
+          const orgId = request.pathParameters?.orgId ?? '';
+          return withAudit(deps, request, () => withOrgRepo(request, allowedOrigins, orgRepository, (repo) => addMemberHandler(request, repo, allowedOrigins)),
+            (body) => {
+              const added = (body as { item?: { userId?: string; role?: string } })?.item;
+              const actor = typeof auditBody()?.actorUserId === 'string' ? (auditBody()!.actorUserId as string) : undefined;
+              return { action: 'org.member_added', targetType: 'membership', targetId: added?.userId ?? '', orgId, actorUserId: actor, metadata: { role: added?.role ?? null } };
+            });
         }
       }
 
       if (request.method === 'DELETE' && request.resource === '/admin/orgs/{orgId}/members/{userId}') {
-        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => removeMemberHandler(request, repo, allowedOrigins));
+        const orgId = request.pathParameters?.orgId ?? '';
+        const memberUserId = request.pathParameters?.userId ?? '';
+        return withAudit(deps, request, () => withOrgRepo(request, allowedOrigins, orgRepository, (repo) => removeMemberHandler(request, repo, allowedOrigins)),
+          () => {
+            const actor = typeof auditBody()?.actorUserId === 'string' ? (auditBody()!.actorUserId as string) : undefined;
+            return { action: 'org.member_removed', targetType: 'membership', targetId: memberUserId, orgId, actorUserId: actor };
+          });
       }
 
       if (request.method === 'GET' && request.resource === '/admin/users/{userId}/invites') {
@@ -249,22 +298,45 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
       }
 
       if (request.method === 'POST' && request.resource === '/admin/orgs/{orgId}/invites/{userId}/accept') {
-        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => acceptInviteHandler(request, repo, allowedOrigins));
+        const orgId = request.pathParameters?.orgId ?? '';
+        const memberUserId = request.pathParameters?.userId ?? '';
+        return withAudit(deps, request, () => withOrgRepo(request, allowedOrigins, orgRepository, (repo) => acceptInviteHandler(request, repo, allowedOrigins)),
+          () => ({ action: 'org.invite_accepted', targetType: 'membership', targetId: memberUserId, orgId, actorUserId: memberUserId }));
       }
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/transfer') {
-        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => transferKitHandler(request, adminRepository, repo, allowedOrigins));
+        const kitId = request.pathParameters?.kitId ?? '';
+        return withAudit(deps, request, () => withOrgRepo(request, allowedOrigins, orgRepository, (repo) => transferKitHandler(request, adminRepository, repo, allowedOrigins)),
+          () => {
+            const b = auditBody();
+            const targetOrgId = typeof b?.targetOrgId === 'string' ? (b.targetOrgId as string) : null;
+            return { action: 'kit.transferred', targetType: 'kit', targetId: kitId, orgId: targetOrgId ?? undefined, metadata: { targetOrgId } };
+          });
       }
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/visibility') {
-        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => setKitVisibilityHandler(request, adminRepository, repo, allowedOrigins));
+        const kitId = request.pathParameters?.kitId ?? '';
+        return withAudit(deps, request, () => withOrgRepo(request, allowedOrigins, orgRepository, (repo) => setKitVisibilityHandler(request, adminRepository, repo, allowedOrigins)),
+          () => {
+            const b = auditBody();
+            const visibility = typeof b?.visibility === 'string' ? (b.visibility as string) : null;
+            return { action: 'kit.visibility_set', targetType: 'kit', targetId: kitId, metadata: { visibility } };
+          });
       }
 
       // --- Tier-2 paid/licensed kits (Seam B) ---
       const entitlementRepository = deps.entitlementRepository;
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/pricing') {
-        return setKitPricingHandler(request, adminRepository, orgRepository, allowedOrigins);
+        const kitId = request.pathParameters?.kitId ?? '';
+        return withAudit(deps, request, () => setKitPricingHandler(request, adminRepository, orgRepository, allowedOrigins),
+          () => {
+            const b = auditBody();
+            return { action: 'kit.pricing_set', targetType: 'kit', targetId: kitId, metadata: {
+              pricing: typeof b?.pricing === 'string' ? (b.pricing as string) : null,
+              priceCents: typeof b?.priceCents === 'number' ? (b.priceCents as number) : null,
+            } };
+          });
       }
 
       if (request.method === 'GET' && request.resource === '/admin/users/{userId}/entitlements') {
@@ -276,7 +348,12 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
       }
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/entitlements') {
-        return withEntitlementRepo(request, allowedOrigins, entitlementRepository, (repo) => grantEntitlementHandler(request, adminRepository, repo, allowedOrigins));
+        const kitId = request.pathParameters?.kitId ?? '';
+        return withAudit(deps, request, () => withEntitlementRepo(request, allowedOrigins, entitlementRepository, (repo) => grantEntitlementHandler(request, adminRepository, repo, allowedOrigins)),
+          (body) => {
+            const ent = (body as { item?: { entitlementId?: string; userId?: string; source?: string } })?.item;
+            return { action: 'entitlement.granted', targetType: 'entitlement', targetId: ent?.entitlementId ?? kitId, actorType: 'admin', metadata: { kitId, userId: ent?.userId ?? null, source: ent?.source ?? null } };
+          });
       }
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/licensed-package') {
@@ -296,6 +373,11 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
 
       if (request.method === 'DELETE' && request.resource === '/admin/users/{userId}/favorites/{kitId}') {
         return withFavoritesRepo(request, allowedOrigins, favoritesRepository, (repo) => removeFavoriteHandler(request, repo, allowedOrigins));
+      }
+
+      // --- Audit log (admin-only reads, Seam B) ---
+      if (request.method === 'GET' && request.resource === '/admin/audit-logs') {
+        return listAuditLogsHandler(request, deps.auditRepository, allowedOrigins);
       }
     }
 
@@ -1663,6 +1745,115 @@ function headerValue(request: CoreRequest, name: string): string | undefined {
   }
 
   return undefined;
+}
+
+/** Drop undefined values so the audit metadata bag stays small + clean. */
+function compactMetadata(meta: Record<string, string | number | boolean | null | undefined>): AuditMetadata | undefined {
+  const out: AuditMetadata = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * Best-effort audit emission. A failed audit write MUST NOT fail the main
+ * operation: errors are swallowed (logged to console) and a missing
+ * auditRepository is a no-op. The handler supplies `timestamp` (core forbids
+ * Date.now()); when omitted we stamp one here at the call boundary.
+ */
+async function emitAudit(
+  deps: RouterDeps,
+  request: CoreRequest,
+  event: {
+    action: AuditAction;
+    targetType: AuditTargetType;
+    targetId: string;
+    actorUserId?: string;
+    actorType?: AuditActorType;
+    actorEmail?: string;
+    orgId?: string;
+    timestamp?: string;
+    metadata?: Record<string, string | number | boolean | null | undefined>;
+  },
+): Promise<void> {
+  const repo = deps.auditRepository;
+  if (!repo) return;
+  try {
+    const actorUserId = event.actorUserId
+      ?? headerValue(request, 'x-agentkit-user-id')
+      ?? 'admin';
+    const actorType: AuditActorType = event.actorType
+      ?? (event.actorUserId || headerValue(request, 'x-agentkit-user-id') ? 'user' : 'admin');
+    await repo.record({
+      timestamp: event.timestamp ?? new Date().toISOString(),
+      actorUserId,
+      actorEmail: event.actorEmail ?? headerValue(request, 'x-agentkit-user-email'),
+      actorType,
+      action: event.action,
+      targetType: event.targetType,
+      targetId: event.targetId,
+      orgId: event.orgId,
+      metadata: event.metadata ? compactMetadata(event.metadata) : undefined,
+      ip: headerValue(request, 'x-forwarded-for')?.split(',')[0]?.trim(),
+    });
+  } catch (err) {
+    // Non-fatal: never let an audit failure break the main operation.
+    console.error('[audit] failed to record event', event.action, err);
+  }
+}
+
+/**
+ * Run a mutation handler and, only on a 2xx response, emit a best-effort audit
+ * event. The audit event is derived from the response body via `build`, which
+ * may return undefined to skip emission (e.g. a no-op idempotent call). Audit
+ * emission never affects the response returned to the caller.
+ */
+async function withAudit(
+  deps: RouterDeps,
+  request: CoreRequest,
+  run: () => Promise<CoreResponse>,
+  build: (responseBody: unknown) => Parameters<typeof emitAudit>[2] | undefined,
+): Promise<CoreResponse> {
+  const response = await run();
+  if (response.statusCode >= 200 && response.statusCode < 300) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(response.body); } catch { parsed = undefined; }
+    const event = build(parsed);
+    if (event) await emitAudit(deps, request, event);
+  }
+  return response;
+}
+
+/** GET /admin/audit-logs — admin-only, filtered + paginated audit events. */
+async function listAuditLogsHandler(
+  request: CoreRequest,
+  repo: AuditRepository | undefined,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  if (!repo) {
+    return json(request, allowedOrigins, 500, { message: 'Audit log is not configured' });
+  }
+  const q = request.queryStringParameters ?? {};
+  const limitRaw = q.limit;
+  let limit: number | undefined;
+  if (limitRaw !== undefined) {
+    if (!/^\d+$/.test(limitRaw) || Number.parseInt(limitRaw, 10) < 1) {
+      return json(request, allowedOrigins, 400, { message: 'limit must be a positive integer' });
+    }
+    limit = Math.min(Number.parseInt(limitRaw, 10), 200);
+  }
+  const page = await repo.list({
+    limit,
+    nextToken: q.nextToken || undefined,
+    actorUserId: q.actorUserId || undefined,
+    targetType: (q.targetType as AuditTargetType) || undefined,
+    targetId: q.targetId || undefined,
+    action: (q.action as AuditAction) || undefined,
+    since: q.since || undefined,
+    until: q.until || undefined,
+  });
+  return json(request, allowedOrigins, 200, { items: page.items, nextToken: page.nextToken });
 }
 
 function parseCatalogQuery(query: CoreRequest['queryStringParameters']): CatalogQuery | Error {

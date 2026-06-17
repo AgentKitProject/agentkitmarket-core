@@ -37,6 +37,7 @@ import {
   createDynamoOrgRepository,
   createDynamoEntitlementRepository,
   createDynamoFavoritesRepository,
+  createDynamoAuditRepository,
   type DynamoClientOverrides,
 } from '../src/adapters/aws/index.js';
 import { runRepositoryContract, type ContractRepos } from './repository-contract.js';
@@ -54,6 +55,7 @@ const TABLES = {
   orgInvites: 'OrgInvites',
   entitlements: 'Entitlements',
   favorites: 'Favorites',
+  auditLog: 'AuditLog',
 } as const;
 
 const S = 'S' as const;
@@ -242,6 +244,40 @@ const TABLE_DEFINITIONS: CreateTableCommandInput[] = [
       { AttributeName: 'kitId', AttributeType: S },
     ],
   },
+  {
+    // AuditLog: PK `AUDIT` / SK `<timestamp>#<auditId>`; GSI actor-index
+    // (actorUserId / sk) and GSI target-index (targetKey / sk).
+    TableName: TABLES.auditLog,
+    BillingMode: 'PAY_PER_REQUEST',
+    KeySchema: [
+      { AttributeName: 'pk', KeyType: 'HASH' },
+      { AttributeName: 'sk', KeyType: 'RANGE' },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'pk', AttributeType: S },
+      { AttributeName: 'sk', AttributeType: S },
+      { AttributeName: 'actorUserId', AttributeType: S },
+      { AttributeName: 'targetKey', AttributeType: S },
+    ],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: 'actor-index',
+        KeySchema: [
+          { AttributeName: 'actorUserId', KeyType: 'HASH' },
+          { AttributeName: 'sk', KeyType: 'RANGE' },
+        ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+      {
+        IndexName: 'target-index',
+        KeySchema: [
+          { AttributeName: 'targetKey', KeyType: 'HASH' },
+          { AttributeName: 'sk', KeyType: 'RANGE' },
+        ],
+        Projection: { ProjectionType: 'ALL' },
+      },
+    ],
+  },
 ];
 
 if (!endpoint) {
@@ -312,6 +348,10 @@ if (!endpoint) {
       favoritesTableName: TABLES.favorites,
       client: overrides,
     });
+    const audit = createDynamoAuditRepository({
+      auditTableName: TABLES.auditLog,
+      client: overrides,
+    });
 
     // Recreate tables per reset for a clean slate each test.
     const reset = async (): Promise<void> => {
@@ -319,6 +359,6 @@ if (!endpoint) {
       await createAllTables();
     };
 
-    return { catalog, admin, org, entitlement, favorites, reset };
+    return { catalog, admin, org, entitlement, favorites, audit, reset };
   });
 }

@@ -254,3 +254,23 @@ CREATE TABLE IF NOT EXISTS favorites (
 );
 
 CREATE INDEX IF NOT EXISTS favorites_user_id_idx ON favorites (user_id);
+
+-- Append-only audit log of significant Market mutations. Never updated/deleted.
+-- `timestamp` is an ISO-8601 string (sorts lexicographically == chronologically).
+CREATE TABLE IF NOT EXISTS audit_logs (
+  audit_id      text PRIMARY KEY,
+  timestamp     text NOT NULL,
+  actor_user_id text NOT NULL,
+  actor_email   text,
+  actor_type    text NOT NULL,
+  action        text NOT NULL,
+  target_type   text NOT NULL,
+  target_id     text NOT NULL,
+  org_id        text,
+  metadata      jsonb,
+  ip            text
+);
+
+CREATE INDEX IF NOT EXISTS audit_logs_timestamp_idx ON audit_logs (timestamp DESC);
+CREATE INDEX IF NOT EXISTS audit_logs_actor_user_id_idx ON audit_logs (actor_user_id);
+CREATE INDEX IF NOT EXISTS audit_logs_target_idx ON audit_logs (target_type, target_id);

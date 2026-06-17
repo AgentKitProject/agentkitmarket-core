@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import type { AdminRepository, CatalogRepository, EntitlementRepository, FavoritesRepository, ObjectStore, OrgRepository } from '../src/core/ports.js';
+import type { AdminRepository, AuditRepository, CatalogRepository, EntitlementRepository, FavoritesRepository, ObjectStore, OrgRepository } from '../src/core/ports.js';
 import type {
   CreateSubmissionInput,
   SubmissionRecord,
@@ -40,6 +40,8 @@ export interface ContractRepos {
   entitlement?: EntitlementRepository;
   /** Favorites repository (cloud-synced kit references). Both adapters provide it. */
   favorites?: FavoritesRepository;
+  /** Audit-log repository (append-only). Both adapters provide it. */
+  audit?: AuditRepository;
   /** Truncate/recreate all backing tables so each test starts clean. */
   reset: () => Promise<void>;
 }
@@ -1117,6 +1119,123 @@ export function runRepositoryContract(name: string, makeRepos: MakeRepos): void 
           req('DELETE', '/admin/users/{userId}/favorites/{kitId}', { userId: 'u_fav4', kitId: 'kit_nope' }),
           deps(),
         );
+        expect(res.statusCode).toBe(200);
+      });
+    });
+
+    describe('audit log (append-only)', () => {
+      function audit(): AuditRepository {
+        if (!repos.audit) {
+          throw new Error('AuditRepository not provided by this backend');
+        }
+        return repos.audit;
+      }
+
+      const ts = (n: number) => `2026-06-1${n}T00:00:00.000Z`;
+
+      it('records and lists events newest-first', async () => {
+        await audit().record({ timestamp: ts(0), actorUserId: 'admin', actorType: 'admin', action: 'kit.hidden', targetType: 'kit', targetId: 'kit_1' });
+        await audit().record({ timestamp: ts(1), actorUserId: 'admin', actorType: 'admin', action: 'kit.unhidden', targetType: 'kit', targetId: 'kit_1' });
+        const page = await audit().list({});
+        expect(page.items).toHaveLength(2);
+        // Newest first.
+        expect(page.items[0].action).toBe('kit.unhidden');
+        expect(page.items[1].action).toBe('kit.hidden');
+        // Repository stamps an auditId.
+        expect(page.items[0].auditId).toMatch(/^aud_/);
+      });
+
+      it('filters by actor, by target, and by action', async () => {
+        await audit().record({ timestamp: ts(0), actorUserId: 'u_a', actorType: 'user', action: 'submission.created', targetType: 'submission', targetId: 's_1' });
+        await audit().record({ timestamp: ts(1), actorUserId: 'u_b', actorType: 'user', action: 'submission.approved', targetType: 'submission', targetId: 's_1' });
+        await audit().record({ timestamp: ts(2), actorUserId: 'u_a', actorType: 'user', action: 'kit.published', targetType: 'kit', targetId: 'k_1' });
+
+        const byActor = await audit().list({ actorUserId: 'u_a' });
+        expect(byActor.items.map((e) => e.action).sort()).toEqual(['kit.published', 'submission.created']);
+
+        const byTarget = await audit().list({ targetType: 'submission', targetId: 's_1' });
+        expect(byTarget.items).toHaveLength(2);
+
+        const byAction = await audit().list({ action: 'kit.published' });
+        expect(byAction.items).toHaveLength(1);
+        expect(byAction.items[0].targetId).toBe('k_1');
+      });
+
+      it('filters by time range', async () => {
+        await audit().record({ timestamp: ts(0), actorUserId: 'admin', actorType: 'admin', action: 'kit.hidden', targetType: 'kit', targetId: 'k_t' });
+        await audit().record({ timestamp: ts(2), actorUserId: 'admin', actorType: 'admin', action: 'kit.unhidden', targetType: 'kit', targetId: 'k_t' });
+        await audit().record({ timestamp: ts(4), actorUserId: 'admin', actorType: 'admin', action: 'kit.removed', targetType: 'kit', targetId: 'k_t' });
+
+        const mid = await audit().list({ since: ts(1), until: ts(3) });
+        expect(mid.items).toHaveLength(1);
+        expect(mid.items[0].action).toBe('kit.unhidden');
+      });
+
+      it('paginates with an opaque nextToken', async () => {
+        for (let i = 0; i < 5; i++) {
+          await audit().record({ timestamp: `2026-06-10T00:00:0${i}.000Z`, actorUserId: 'admin', actorType: 'admin', action: 'kit.hidden', targetType: 'kit', targetId: `k_${i}` });
+        }
+        const first = await audit().list({ limit: 2 });
+        expect(first.items).toHaveLength(2);
+        expect(first.nextToken).toBeTruthy();
+        const second = await audit().list({ limit: 2, nextToken: first.nextToken });
+        expect(second.items).toHaveLength(2);
+        // No overlap between pages.
+        const ids = new Set([...first.items, ...second.items].map((e) => e.auditId));
+        expect(ids.size).toBe(4);
+      });
+
+      it('preserves metadata, orgId, and actorEmail round-trip', async () => {
+        await audit().record({
+          timestamp: ts(0), actorUserId: 'admin', actorEmail: 'a@b.com', actorType: 'admin',
+          action: 'kit.pricing_set', targetType: 'kit', targetId: 'k_meta', orgId: 'org_1',
+          metadata: { priceCents: 500, pricing: 'paid' },
+        });
+        const page = await audit().list({ action: 'kit.pricing_set' });
+        expect(page.items[0].orgId).toBe('org_1');
+        expect(page.items[0].actorEmail).toBe('a@b.com');
+        expect(page.items[0].metadata).toEqual({ priceCents: 500, pricing: 'paid' });
+      });
+    });
+
+    describe('audit emission from handlers', () => {
+      function req(method: string, resource: string, pathParameters: Record<string, string>, body?: unknown): CoreRequest {
+        return {
+          method, resource, pathParameters,
+          queryStringParameters: null,
+          headers: { 'x-agentkitmarket-admin-key': 'test-admin-key' },
+          body: body === undefined ? null : JSON.stringify(body),
+        };
+      }
+
+      async function publishedKitId(): Promise<string> {
+        const queued = await uploadAndQueue(repos.admin, baseInput());
+        const kit = await repos.admin.publishSubmission({ ...queued, validationStatus: 'passed' }, new Date().toISOString());
+        return kit.kitId;
+      }
+
+      it('emits kit.hidden on a successful hide', async () => {
+        const kitId = await publishedKitId();
+        const res = await routeRequest(
+          req('POST', '/admin/kits/{kitId}/hide', { kitId }),
+          { repository: repos.catalog, adminRepository: repos.admin, auditRepository: repos.audit, adminKey: 'test-admin-key' },
+        );
+        expect(res.statusCode).toBe(200);
+        const page = await repos.audit!.list({ targetType: 'kit', targetId: kitId });
+        expect(page.items.some((e) => e.action === 'kit.hidden')).toBe(true);
+      });
+
+      it('a failing audit write does NOT fail the main operation', async () => {
+        const kitId = await publishedKitId();
+        const explodingAudit: AuditRepository = {
+          async record() { throw new Error('audit backend down'); },
+          async list() { return { items: [] }; },
+        };
+        const res = await routeRequest(
+          req('POST', '/admin/kits/{kitId}/hide', { kitId }),
+          { repository: repos.catalog, adminRepository: repos.admin, auditRepository: explodingAudit, adminKey: 'test-admin-key' },
+        );
+        // Main op still succeeds despite the audit write throwing.
         expect(res.statusCode).toBe(200);
       });
     });

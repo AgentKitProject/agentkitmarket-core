@@ -15,6 +15,7 @@ export type {
   PackageUploadService,
   EntitlementRepository,
   FavoritesRepository,
+  AuditRepository,
   ObjectStore,
   MessageQueue,
   ValidationJobMessage,

@@ -28,6 +28,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'node:crypto';
 import type {
   AdminRepository,
+  AuditRepository,
   CatalogRepository,
   EntitlementRepository,
   FavoritesRepository,
@@ -40,6 +41,10 @@ import type {
 } from '../../core/ports.js';
 import type {
   AddFavoriteInput,
+  AuditEvent,
+  AuditPage,
+  ListAuditInput,
+  RecordAuditInput,
   CatalogDetail,
   CatalogPage,
   CreateSubmissionInput,
@@ -1218,6 +1223,161 @@ export function createDynamoFavoritesRepository(config: DynamoFavoritesConfig): 
         TableName: favoritesTableName,
         Key: { userId, kitId },
       }));
+    },
+  };
+}
+
+/** Config for the DynamoDB audit-log repository. */
+export interface DynamoAuditConfig {
+  auditTableName: string;
+  /** Optional client overrides (dynamodb-local). Omit for hosted. */
+  client?: DynamoClientOverrides;
+}
+
+/** Single logical-log partition key value. */
+const AUDIT_PK = 'AUDIT';
+
+function isAuditEvent(item: unknown): item is AuditEvent {
+  return typeof item === 'object' && item !== null
+    && typeof (item as { auditId?: unknown }).auditId === 'string'
+    && typeof (item as { action?: unknown }).action === 'string';
+}
+
+function encodeAuditToken(key: Record<string, unknown> | undefined): string | undefined {
+  if (!key) return undefined;
+  return Buffer.from(JSON.stringify(key), 'utf8').toString('base64');
+}
+
+function decodeAuditToken(token: string | undefined): Record<string, unknown> | undefined {
+  if (!token) return undefined;
+  try {
+    return JSON.parse(Buffer.from(token, 'base64').toString('utf8')) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * DynamoDB audit-log repository (append-only). PK `AUDIT` / SK
+ * `<timestamp>#<auditId>` for time-ordered scans; GSI `actor-index`
+ * (actorUserId / sk) and GSI `target-index` (targetKey=`<targetType>#<targetId>`
+ * / sk) for filtered queries. Newest-first via ScanIndexForward=false.
+ */
+export function createDynamoAuditRepository(config: DynamoAuditConfig): AuditRepository {
+  const { auditTableName } = config;
+  const dynamo = buildDynamoDocumentClient(config.client);
+
+  return {
+    async record(input: RecordAuditInput): Promise<AuditEvent> {
+      const auditId = `aud_${randomUUID()}`;
+      const event: AuditEvent = {
+        auditId,
+        timestamp: input.timestamp,
+        actorUserId: input.actorUserId,
+        actorEmail: input.actorEmail,
+        actorType: input.actorType,
+        action: input.action,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        orgId: input.orgId,
+        metadata: input.metadata,
+        ip: input.ip,
+      };
+      const sk = `${input.timestamp}#${auditId}`;
+      const item: Record<string, unknown> = {
+        pk: AUDIT_PK,
+        sk,
+        targetKey: `${input.targetType}#${input.targetId}`,
+        ...event,
+      };
+      // Drop undefined attributes (DynamoDB document client rejects them by default config).
+      for (const k of Object.keys(item)) {
+        if (item[k] === undefined) delete item[k];
+      }
+      await dynamo.send(new PutCommand({ TableName: auditTableName, Item: item }));
+      return event;
+    },
+
+    async list(input: ListAuditInput): Promise<AuditPage> {
+      const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+      const exclusiveStartKey = decodeAuditToken(input.nextToken);
+
+      // Build SK range condition for since/until (SK begins with timestamp).
+      const skNames: Record<string, string> = { '#sk': 'sk' };
+      const skValues: Record<string, unknown> = {};
+      let skCondition = '';
+      if (input.since && input.until) {
+        skCondition = '#sk BETWEEN :since AND :until';
+        skValues[':since'] = input.since;
+        skValues[':until'] = `${input.until}#￿`;
+      } else if (input.since) {
+        skCondition = '#sk >= :since';
+        skValues[':since'] = input.since;
+      } else if (input.until) {
+        skCondition = '#sk <= :until';
+        skValues[':until'] = `${input.until}#￿`;
+      }
+
+      // Post-query filters (action, plus actor/target when not the partition key).
+      const filterExprs: string[] = [];
+      const filterNames: Record<string, string> = {};
+      const filterValues: Record<string, unknown> = {};
+      const addFilter = (attr: string, value: unknown) => {
+        const nameKey = `#f_${attr}`;
+        const valKey = `:f_${attr}`;
+        filterNames[nameKey] = attr;
+        filterValues[valKey] = value;
+        filterExprs.push(`${nameKey} = ${valKey}`);
+      };
+      if (input.action) addFilter('action', input.action);
+
+      let indexName: string | undefined;
+      let keyExpr: string;
+      const keyNames: Record<string, string> = { ...skNames };
+      const keyValues: Record<string, unknown> = { ...skValues };
+
+      if (input.actorUserId) {
+        indexName = 'actor-index';
+        keyNames['#pk'] = 'actorUserId';
+        keyValues[':pk'] = input.actorUserId;
+        if (input.targetType && input.targetId) addFilter('targetKey', `${input.targetType}#${input.targetId}`);
+      } else if (input.targetType && input.targetId) {
+        indexName = 'target-index';
+        keyNames['#pk'] = 'targetKey';
+        keyValues[':pk'] = `${input.targetType}#${input.targetId}`;
+      } else {
+        keyNames['#pk'] = 'pk';
+        keyValues[':pk'] = AUDIT_PK;
+        if (input.targetType) addFilter('targetType', input.targetType);
+      }
+      keyExpr = skCondition ? '#pk = :pk AND ' + skCondition : '#pk = :pk';
+
+      const result = await dynamo.send(new QueryCommand({
+        TableName: auditTableName,
+        IndexName: indexName,
+        KeyConditionExpression: keyExpr,
+        ExpressionAttributeNames: {
+          ...keyNames,
+          ...(filterExprs.length ? filterNames : {}),
+        },
+        ExpressionAttributeValues: {
+          ...keyValues,
+          ...(filterExprs.length ? filterValues : {}),
+        },
+        ...(filterExprs.length ? { FilterExpression: filterExprs.join(' AND ') } : {}),
+        ScanIndexForward: false,
+        Limit: limit,
+        ExclusiveStartKey: exclusiveStartKey,
+      }));
+
+      const items = (result.Items ?? [])
+        .filter(isAuditEvent)
+        .map((raw) => {
+          const { pk, sk, targetKey, ...rest } = raw as unknown as Record<string, unknown>;
+          void pk; void sk; void targetKey;
+          return rest as unknown as AuditEvent;
+        });
+      return { items, nextToken: encodeAuditToken(result.LastEvaluatedKey) };
     },
   };
 }

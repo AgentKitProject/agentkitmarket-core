@@ -16,6 +16,7 @@ import {
   createPostgresOrgRepository,
   createPostgresEntitlementRepository,
   createPostgresFavoritesRepository,
+  createPostgresAuditRepository,
   type PgPool,
 } from '../src/adapters/selfhost/postgres.js';
 import { runRepositoryContract, type ContractRepos } from './repository-contract.js';
@@ -38,6 +39,7 @@ runRepositoryContract('postgres (pg-mem)', async (): Promise<ContractRepos> => {
   let orgRepo = undefined as unknown as ReturnType<typeof createPostgresOrgRepository>;
   let entitlementRepo = undefined as unknown as ReturnType<typeof createPostgresEntitlementRepository>;
   let favoritesRepo = undefined as unknown as ReturnType<typeof createPostgresFavoritesRepository>;
+  let auditRepo = undefined as unknown as ReturnType<typeof createPostgresAuditRepository>;
 
   const reset = async (): Promise<void> => {
     const db = newDb();
@@ -49,6 +51,7 @@ runRepositoryContract('postgres (pg-mem)', async (): Promise<ContractRepos> => {
     orgRepo = createPostgresOrgRepository(pool);
     entitlementRepo = createPostgresEntitlementRepository(pool);
     favoritesRepo = createPostgresFavoritesRepository(pool);
+    auditRepo = createPostgresAuditRepository(pool);
   };
 
   await reset();
@@ -59,6 +62,7 @@ runRepositoryContract('postgres (pg-mem)', async (): Promise<ContractRepos> => {
     get org() { return orgRepo; },
     get entitlement() { return entitlementRepo; },
     get favorites() { return favoritesRepo; },
+    get audit() { return auditRepo; },
     reset,
   };
 });
