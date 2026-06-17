@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.8.0...v0.9.0) (2026-06-17)
+
+
+### Features
+
+* append-only audit log ([#9](https://github.com/AgentKitProject/agentkitmarket-core/issues/9)) ([a7af5e0](https://github.com/AgentKitProject/agentkitmarket-core/commit/a7af5e0eeadfaf892f2859eafc4f4894203dbd6a))
+
 ## [0.8.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.7.0...v0.8.0) (2026-06-16)
 
 
