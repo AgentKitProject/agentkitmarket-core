@@ -10,6 +10,7 @@
 
 import type {
   AdminRepository,
+  AuditRepository,
   CatalogRepository,
   EntitlementRepository,
   FavoritesRepository,
@@ -51,6 +52,8 @@ export interface RouterDeps {
   entitlementRepository?: EntitlementRepository;
   /** Cloud-synced kit-reference favorites. */
   favoritesRepository?: FavoritesRepository;
+  /** Append-only audit log of significant mutations (admin-only reads). */
+  auditRepository?: AuditRepository;
   packageUploadService?: PackageUploadService;
   /** Object store for reading kit packages (Tier-2 watermarked licensed-package fetch). */
   objectStore?: ObjectStore;

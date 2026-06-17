@@ -131,6 +131,96 @@ export interface AddFavoriteInput {
   publisherName?: string;
 }
 
+/** Audit actor classification. Mirrors `AuditActorType` in @agentkitforge/contracts. */
+export type AuditActorType = 'user' | 'admin' | 'system';
+
+/** Audit target classification. Mirrors `AuditTargetType` in @agentkitforge/contracts. */
+export type AuditTargetType =
+  | 'submission'
+  | 'kit'
+  | 'org'
+  | 'membership'
+  | 'entitlement'
+  | 'favorite';
+
+/** Audit action enum. Mirrors `AuditAction` in @agentkitforge/contracts. */
+export type AuditAction =
+  | 'submission.created'
+  | 'submission.validated'
+  | 'submission.approved'
+  | 'submission.rejected'
+  | 'submission.archived'
+  | 'submission.canceled'
+  | 'submission.published'
+  | 'kit.published'
+  | 'kit.hidden'
+  | 'kit.unhidden'
+  | 'kit.removed'
+  | 'kit.pricing_set'
+  | 'kit.visibility_set'
+  | 'kit.transferred'
+  | 'org.created'
+  | 'org.member_added'
+  | 'org.member_removed'
+  | 'org.invite_accepted'
+  | 'org.deleted'
+  | 'entitlement.granted'
+  | 'entitlement.revoked';
+
+/** Small metadata bag for an audit event (e.g. {fromStatus,toStatus}). */
+export type AuditMetadata = Record<string, string | number | boolean | null>;
+
+/**
+ * An append-only audit event. Mirrors `AuditEvent` in @agentkitforge/contracts.
+ * Records are never updated or deleted. The route/handler layer supplies the
+ * timestamp (core forbids Date.now()); the repository stamps `auditId`.
+ */
+export interface AuditEvent {
+  auditId: string;
+  timestamp: string;
+  actorUserId: string;
+  actorEmail?: string;
+  actorType: AuditActorType;
+  action: AuditAction;
+  targetType: AuditTargetType;
+  targetId: string;
+  orgId?: string;
+  metadata?: AuditMetadata;
+  ip?: string;
+}
+
+/** Input to record an audit event. The repository assigns `auditId`. */
+export interface RecordAuditInput {
+  timestamp: string;
+  actorUserId: string;
+  actorEmail?: string;
+  actorType: AuditActorType;
+  action: AuditAction;
+  targetType: AuditTargetType;
+  targetId: string;
+  orgId?: string;
+  metadata?: AuditMetadata;
+  ip?: string;
+}
+
+/** Filters + pagination for listing audit events. */
+export interface ListAuditInput {
+  limit?: number;
+  nextToken?: string;
+  actorUserId?: string;
+  targetType?: AuditTargetType;
+  targetId?: string;
+  action?: AuditAction;
+  since?: string;
+  until?: string;
+}
+
+/** A page of audit events, newest first. */
+export interface AuditPage {
+  items: AuditEvent[];
+  nextToken?: string;
+}
+
 export interface SafeInput {
   name: string;
   label?: string;

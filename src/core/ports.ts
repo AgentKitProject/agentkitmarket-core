@@ -18,6 +18,8 @@
 
 import type {
   AddFavoriteInput,
+  AuditEvent,
+  AuditPage,
   CatalogPage,
   CatalogDetail,
   CreateSubmissionInput,
@@ -36,6 +38,8 @@ import type {
   OrgInvite,
   OrgMembership,
   OrgRole,
+  RecordAuditInput,
+  ListAuditInput,
   SubmissionRecord,
   ValidationJobRecord,
 } from "./types.js";
@@ -171,6 +175,22 @@ export interface EntitlementRepository {
  * the dual-backend contract suite enforces parity. Favorites are references,
  * never kit copies — cached display metadata is best-effort.
  */
+/**
+ * Append-only audit log of significant Market mutations. The handler layer
+ * supplies the event `timestamp` (core forbids Date.now()); the repository
+ * stamps `auditId`. Records are never updated or deleted. Both adapters (AWS
+ * DynamoDB: PK `AUDIT` / SK `<timestamp>#<auditId>`, GSIs by actor and by
+ * `<targetType>#<targetId>`; self-host Postgres: `audit_logs` table with
+ * indexes on timestamp, actor_user_id, (target_type, target_id)) implement this
+ * identically; the dual-backend contract suite enforces parity.
+ */
+export interface AuditRepository {
+  /** Append an event. Best-effort at the call site — a failure must not fail the main op. */
+  record(input: RecordAuditInput): Promise<AuditEvent>;
+  /** List events newest-first with optional filters + opaque pagination. */
+  list(input: ListAuditInput): Promise<AuditPage>;
+}
+
 export interface FavoritesRepository {
   /** Idempotent on (userId, kitId): re-adding refreshes cached metadata + addedAt is preserved. */
   addFavorite(userId: string, input: AddFavoriteInput): Promise<Favorite>;

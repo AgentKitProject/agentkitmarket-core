@@ -15,7 +15,7 @@ interface RoutePattern {
   template: string;
 }
 
-const ROUTES: RoutePattern[] = [
+export const ROUTES: RoutePattern[] = [
   { method: 'GET', template: '/health' },
   { method: 'GET', template: '/kits' },
   { method: 'GET', template: '/kits/{slug}' },
@@ -56,6 +56,8 @@ const ROUTES: RoutePattern[] = [
   { method: 'GET', template: '/admin/users/{userId}/favorites' },
   { method: 'POST', template: '/admin/users/{userId}/favorites' },
   { method: 'DELETE', template: '/admin/users/{userId}/favorites/{kitId}' },
+  // Audit log (admin-only, Seam B).
+  { method: 'GET', template: '/admin/audit-logs' },
 ];
 
 export interface MatchedRoute {

@@ -28,6 +28,7 @@ import {
   createPostgresOrgRepository,
   createPostgresEntitlementRepository,
   createPostgresFavoritesRepository,
+  createPostgresAuditRepository,
   type PgPool,
 } from '../adapters/selfhost/postgres.js';
 import { createMinioObjectStore } from '../adapters/selfhost/objectstore.js';
@@ -103,6 +104,7 @@ export async function startServer(): Promise<StartServerResult> {
   const orgRepository = createPostgresOrgRepository(pool as unknown as PgPool);
   const entitlementRepository = createPostgresEntitlementRepository(pool as unknown as PgPool);
   const favoritesRepository = createPostgresFavoritesRepository(pool as unknown as PgPool);
+  const auditRepository = createPostgresAuditRepository(pool as unknown as PgPool);
   const packageUploadService = createSelfHostPackageUploadService({ objectStore, queue });
 
   const allowedOrigins = config.allowedOrigins.length > 0 ? config.allowedOrigins : undefined;
@@ -114,6 +116,7 @@ export async function startServer(): Promise<StartServerResult> {
       orgRepository,
       entitlementRepository,
       favoritesRepository,
+      auditRepository,
       // The MinIO ObjectStore doubles as the Tier-2 licensed-package reader.
       objectStore,
       packageUploadService,
@@ -146,6 +149,7 @@ interface ServerDeps {
   orgRepository: ReturnType<typeof createPostgresOrgRepository>;
   entitlementRepository: ReturnType<typeof createPostgresEntitlementRepository>;
   favoritesRepository: ReturnType<typeof createPostgresFavoritesRepository>;
+  auditRepository: ReturnType<typeof createPostgresAuditRepository>;
   objectStore: ReturnType<typeof createMinioObjectStore>;
   packageUploadService: ReturnType<typeof createSelfHostPackageUploadService>;
   allowedOrigins?: string[];
