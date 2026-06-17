@@ -51,6 +51,7 @@ export const ROUTES: RoutePattern[] = [
   { method: 'GET', template: '/admin/users/{userId}/entitlements' },
   { method: 'GET', template: '/admin/kits/{kitId}/entitlements/{userId}' },
   { method: 'POST', template: '/admin/kits/{kitId}/entitlements' },
+  { method: 'POST', template: '/admin/entitlements/by-subscription/{stripeSubscriptionId}/status' },
   { method: 'POST', template: '/admin/kits/{kitId}/licensed-package' },
   // Favorites (cloud-synced kit references, Seam B).
   { method: 'GET', template: '/admin/users/{userId}/favorites' },

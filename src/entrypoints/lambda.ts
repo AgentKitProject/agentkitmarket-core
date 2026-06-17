@@ -392,6 +392,9 @@ function createLazyDynamoEntitlementRepository(): EntitlementRepository {
     listEntitlementsForKit(kitId: string): Promise<Entitlement[]> {
       return getRepository().listEntitlementsForKit(kitId);
     },
+    setEntitlementStatusBySubscription(stripeSubscriptionId, status, expiresAt) {
+      return getRepository().setEntitlementStatusBySubscription(stripeSubscriptionId, status, expiresAt);
+    },
   };
 }
 

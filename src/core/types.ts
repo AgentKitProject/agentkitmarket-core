@@ -165,7 +165,8 @@ export type AuditAction =
   | 'org.invite_accepted'
   | 'org.deleted'
   | 'entitlement.granted'
-  | 'entitlement.revoked';
+  | 'entitlement.revoked'
+  | 'entitlement.subscription_status_set';
 
 /** Small metadata bag for an audit event (e.g. {fromStatus,toStatus}). */
 export type AuditMetadata = Record<string, string | number | boolean | null>;
@@ -277,6 +278,8 @@ export interface KitRecord {
   /** v1 is USD-only; the field is still stored. */
   currency?: string;
   interval?: PriceInterval;
+  /** Subscription free-trial length in days; only meaningful for subscription kits. */
+  trialDays?: number;
   /** Paid kits default false (online-only); free kits are treated as downloadable. */
   downloadable?: boolean;
   licenseType?: LicenseType;

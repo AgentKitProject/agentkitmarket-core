@@ -61,6 +61,8 @@ export interface SetPricingFields {
   priceCents?: number;
   currency?: string;
   interval?: 'month' | 'year';
+  /** Subscription free-trial days; only meaningful for subscription kits. */
+  trialDays?: number;
   downloadable?: boolean;
   licenseType?: 'default' | 'custom';
   licenseText?: string;
@@ -90,6 +92,7 @@ export function resolveKitPricingUpdate(fields: SetPricingFields): KitPricingUpd
       priceCents: undefined,
       currency,
       interval: undefined,
+      trialDays: undefined,
       downloadable: true,
       licenseType,
       licenseText: licenseType === 'custom' ? fields.licenseText : undefined,
@@ -114,6 +117,14 @@ export function resolveKitPricingUpdate(fields: SetPricingFields): KitPricingUpd
     priceCents: fields.priceCents,
     currency,
     interval: fields.priceModel === 'subscription' ? fields.interval : undefined,
+    // trialDays only applies to subscriptions; zero/absent means no trial.
+    trialDays:
+      fields.priceModel === 'subscription'
+      && typeof fields.trialDays === 'number'
+      && Number.isInteger(fields.trialDays)
+      && fields.trialDays > 0
+        ? fields.trialDays
+        : undefined,
     // Paid kits default to online-only (not downloadable) unless explicitly true.
     downloadable: fields.downloadable === true,
     licenseType,

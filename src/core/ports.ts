@@ -25,6 +25,7 @@ import type {
   CreateSubmissionInput,
   CreateSubmissionResult,
   Entitlement,
+  EntitlementStatus,
   Favorite,
   GrantEntitlementInput,
   KitRecord,
@@ -144,6 +145,8 @@ export interface KitPricingUpdate {
   priceCents?: number;
   currency: string;
   interval?: PriceInterval;
+  /** Subscription free-trial days; only set for subscription kits, else undefined/0. */
+  trialDays?: number;
   downloadable: boolean;
   licenseType: LicenseType;
   licenseText?: string;
@@ -166,6 +169,18 @@ export interface EntitlementRepository {
   /** Flips an active entitlement to `revoked`; returns the updated row or undefined. */
   revokeEntitlement(userId: string, kitId: string): Promise<Entitlement | undefined>;
   listEntitlementsForKit(kitId: string): Promise<Entitlement[]>;
+  /**
+   * Subscription lifecycle: locate the entitlement(s) carrying the given Stripe
+   * subscription id and set their status (active/expired/revoked), optionally
+   * updating expiresAt. Used by the Stripe webhook on subscription.updated /
+   * subscription.deleted. Returns the updated rows (may be empty). Core never
+   * talks to Stripe — the app passes the subscription id + derived status.
+   */
+  setEntitlementStatusBySubscription(
+    stripeSubscriptionId: string,
+    status: EntitlementStatus,
+    expiresAt?: string,
+  ): Promise<Entitlement[]>;
 }
 
 /**

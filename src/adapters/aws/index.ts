@@ -50,6 +50,7 @@ import type {
   CreateSubmissionInput,
   CreateSubmissionResult,
   Entitlement,
+  EntitlementStatus,
   Favorite,
   GrantEntitlementInput,
   KitRecord,
@@ -650,6 +651,7 @@ export function createDynamoAdminRepository(config: DynamoAdminConfig): AdminRep
         ['priceCents', pricing.priceCents],
         ['currency', pricing.currency],
         ['interval', pricing.interval],
+        ['trialDays', pricing.trialDays],
         ['downloadable', pricing.downloadable],
         ['licenseType', pricing.licenseType],
         ['licenseText', pricing.licenseText],
@@ -1163,6 +1165,42 @@ export function createDynamoEntitlementRepository(config: DynamoEntitlementConfi
         ExpressionAttributeValues: { ':kitId': kitId },
       }));
       return (result.Items ?? []).filter(isEntitlement).sort((a, b) => a.grantedAt.localeCompare(b.grantedAt));
+    },
+
+    async setEntitlementStatusBySubscription(
+      stripeSubscriptionId: string,
+      status: EntitlementStatus,
+      expiresAt?: string,
+    ): Promise<Entitlement[]> {
+      // No GSI on stripeSubscriptionId: the entitlements table is small and
+      // subscription events are low-frequency, so a filtered scan is adequate.
+      const scan = await dynamo.send(new ScanCommand({
+        TableName: entitlementsTableName,
+        FilterExpression: 'stripeSubscriptionId = :sub',
+        ExpressionAttributeValues: { ':sub': stripeSubscriptionId },
+      }));
+      const matches = (scan.Items ?? []).filter(isEntitlement);
+      const updated: Entitlement[] = [];
+      for (const ent of matches) {
+        const names: Record<string, string> = { '#status': 'status' };
+        const values: Record<string, unknown> = { ':status': status };
+        const sets = ['#status = :status'];
+        if (expiresAt !== undefined) {
+          names['#expiresAt'] = 'expiresAt';
+          values[':expiresAt'] = expiresAt;
+          sets.push('#expiresAt = :expiresAt');
+        }
+        const result = await dynamo.send(new UpdateCommand({
+          TableName: entitlementsTableName,
+          Key: { userId: ent.userId, kitId: ent.kitId },
+          UpdateExpression: `SET ${sets.join(', ')}`,
+          ExpressionAttributeNames: names,
+          ExpressionAttributeValues: values,
+          ReturnValues: 'ALL_NEW',
+        }));
+        if (isEntitlement(result.Attributes)) updated.push(result.Attributes);
+      }
+      return updated;
     },
   };
 }

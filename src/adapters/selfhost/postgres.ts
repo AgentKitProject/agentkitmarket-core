@@ -40,6 +40,7 @@ import type {
   CreateSubmissionInput,
   CreateSubmissionResult,
   Entitlement,
+  EntitlementStatus,
   Favorite,
   GrantEntitlementInput,
   KitRecord,
@@ -130,6 +131,7 @@ function rowToKit(row: any): KitRecord {
     priceCents: num(row.price_cents),
     currency: str(row.currency),
     interval: str(row.interval) as KitRecord['interval'],
+    trialDays: num(row.trial_days),
     downloadable: row.downloadable === null || row.downloadable === undefined ? undefined : row.downloadable,
     licenseType: str(row.license_type) as KitRecord['licenseType'],
     licenseText: str(row.license_text),
@@ -707,8 +709,9 @@ export function createPostgresAdminRepository(pool: PgPool): AdminRepository {
       const result = await pool.query(
         `UPDATE kits SET
            pricing = $2, price_model = $3, price_cents = $4, currency = $5, interval = $6,
-           downloadable = $7, license_type = $8, license_text = $9, license_version = $10,
-           updated_at = $11
+           trial_days = $7,
+           downloadable = $8, license_type = $9, license_text = $10, license_version = $11,
+           updated_at = $12
          WHERE kit_id = $1 RETURNING *`,
         [
           kitId,
@@ -717,6 +720,7 @@ export function createPostgresAdminRepository(pool: PgPool): AdminRepository {
           pricing.priceCents ?? null,
           pricing.currency,
           pricing.interval ?? null,
+          pricing.trialDays ?? null,
           pricing.downloadable,
           pricing.licenseType,
           pricing.licenseText ?? null,
@@ -858,10 +862,10 @@ async function upsertKit(pool: PgQueryable, k: KitRecord): Promise<void> {
        publisher, categories, tags, badges, required_inputs, prepared_prompts, skills,
        validation_summary, latest_version, owner_org_id, visibility,
        pricing, price_model, price_cents, currency, interval, downloadable,
-       license_type, license_text, license_version
+       license_type, license_text, license_version, trial_days
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,
-       $33,$34,$35,$36,$37,$38,$39,$40,$41
+       $33,$34,$35,$36,$37,$38,$39,$40,$41,$42
      )
      ON CONFLICT (kit_id) DO UPDATE SET
        slug = EXCLUDED.slug, name = EXCLUDED.name, summary = EXCLUDED.summary,
@@ -883,7 +887,7 @@ async function upsertKit(pool: PgQueryable, k: KitRecord): Promise<void> {
        price_cents = EXCLUDED.price_cents, currency = EXCLUDED.currency,
        interval = EXCLUDED.interval, downloadable = EXCLUDED.downloadable,
        license_type = EXCLUDED.license_type, license_text = EXCLUDED.license_text,
-       license_version = EXCLUDED.license_version`,
+       license_version = EXCLUDED.license_version, trial_days = EXCLUDED.trial_days`,
     [
       k.kitId, k.slug, k.name, k.summary, k.publisherId, k.ownerUserId ?? null, k.status,
       k.validationStatus, k.reviewStatus, k.currentVersion ?? null, k.verificationStatus ?? null,
@@ -896,7 +900,7 @@ async function upsertKit(pool: PgQueryable, k: KitRecord): Promise<void> {
       k.ownerOrgId ?? null, k.visibility ?? null,
       k.pricing ?? null, k.priceModel ?? null, k.priceCents ?? null, k.currency ?? null,
       k.interval ?? null, k.downloadable ?? null, k.licenseType ?? null,
-      k.licenseText ?? null, k.licenseVersion ?? null,
+      k.licenseText ?? null, k.licenseVersion ?? null, k.trialDays ?? null,
     ],
   );
 }
@@ -1201,6 +1205,22 @@ export function createPostgresEntitlementRepository(pool: PgPool): EntitlementRe
       const result = await pool.query(
         `SELECT * FROM entitlements WHERE kit_id = $1 ORDER BY granted_at`,
         [kitId],
+      );
+      return result.rows.map(rowToEntitlement);
+    },
+
+    async setEntitlementStatusBySubscription(
+      stripeSubscriptionId: string,
+      status: EntitlementStatus,
+      expiresAt?: string,
+    ): Promise<Entitlement[]> {
+      const result = await pool.query(
+        `UPDATE entitlements
+           SET status = $2,
+               expires_at = COALESCE($3, expires_at)
+           WHERE stripe_subscription_id = $1
+           RETURNING *`,
+        [stripeSubscriptionId, status, expiresAt ?? null],
       );
       return result.rows.map(rowToEntitlement);
     },

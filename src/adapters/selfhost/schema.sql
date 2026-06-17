@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS kits (
   price_cents         bigint,
   currency            text,
   interval            text,
+  trial_days          integer,
   downloadable        boolean,
   license_type        text,
   license_text        text,
@@ -161,6 +162,7 @@ ALTER TABLE kits ADD COLUMN IF NOT EXISTS price_model text;
 ALTER TABLE kits ADD COLUMN IF NOT EXISTS price_cents bigint;
 ALTER TABLE kits ADD COLUMN IF NOT EXISTS currency text;
 ALTER TABLE kits ADD COLUMN IF NOT EXISTS interval text;
+ALTER TABLE kits ADD COLUMN IF NOT EXISTS trial_days integer;
 ALTER TABLE kits ADD COLUMN IF NOT EXISTS downloadable boolean;
 ALTER TABLE kits ADD COLUMN IF NOT EXISTS license_type text;
 ALTER TABLE kits ADD COLUMN IF NOT EXISTS license_text text;

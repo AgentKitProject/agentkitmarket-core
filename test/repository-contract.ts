@@ -824,6 +824,34 @@ export function runRepositoryContract(name: string, makeRepos: MakeRepos): void 
           expect(res.statusCode).toBe(200);
         });
 
+        it('persists trialDays for a subscription kit', async () => {
+          const kitId = await publishKit(baseInput());
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/pricing', { kitId }, {
+              actorUserId: 'user_1', pricing: 'paid', priceModel: 'subscription',
+              priceCents: 999, interval: 'month', trialDays: 7,
+            }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(200);
+          expect(JSON.parse(res.body).item.trialDays).toBe(7);
+          const kit = await repos.admin.getKit(kitId);
+          expect(kit?.trialDays).toBe(7);
+        });
+
+        it('ignores trialDays for one-time kits', async () => {
+          const kitId = await publishKit(baseInput());
+          const res = await routeRequest(
+            req('POST', '/admin/kits/{kitId}/pricing', { kitId }, {
+              actorUserId: 'user_1', pricing: 'paid', priceModel: 'one_time',
+              priceCents: 500, trialDays: 14,
+            }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(200);
+          expect(JSON.parse(res.body).item.trialDays).toBeNull();
+        });
+
         it('custom license is stored and resolves as the effective license', async () => {
           const kitId = await publishKit(baseInput());
           await routeRequest(
@@ -891,6 +919,57 @@ export function runRepositoryContract(name: string, makeRepos: MakeRepos): void 
           const second = await ent().getEntitlement('buyer_2', kitId);
           expect(second?.entitlementId).toBe(first?.entitlementId);
           expect(second?.status).toBe('active');
+        });
+
+        it('setEntitlementStatusBySubscription flips status + expiry by Stripe sub id', async () => {
+          const kitId = await publishKit(baseInput());
+          await ent().grantEntitlement({
+            kitId, userId: 'sub_buyer', source: 'purchase',
+            licenseVersion: DEFAULT_KIT_LICENSE_VERSION,
+            licenseAcceptedAt: new Date().toISOString(),
+            licenseTextSnapshot: DEFAULT_KIT_LICENSE,
+            stripeSubscriptionId: 'sub_abc123',
+            expiresAt: '2099-01-01T00:00:00.000Z',
+          });
+
+          const expired = await ent().setEntitlementStatusBySubscription(
+            'sub_abc123', 'expired', '2000-01-01T00:00:00.000Z',
+          );
+          expect(expired).toHaveLength(1);
+          expect(expired[0].status).toBe('expired');
+          expect(expired[0].expiresAt).toBe('2000-01-01T00:00:00.000Z');
+
+          // Re-activate (trialing/renewal) without touching expiry keeps prior expiry.
+          const active = await ent().setEntitlementStatusBySubscription('sub_abc123', 'active');
+          expect(active[0].status).toBe('active');
+          expect(active[0].expiresAt).toBe('2000-01-01T00:00:00.000Z');
+
+          // Unknown subscription id matches nothing.
+          const none = await ent().setEntitlementStatusBySubscription('sub_missing', 'expired');
+          expect(none).toHaveLength(0);
+        });
+
+        it('subscription-status route flips entitlement status by Stripe sub id', async () => {
+          const kitId = await publishKit(baseInput());
+          await ent().grantEntitlement({
+            kitId, userId: 'route_sub_buyer', source: 'purchase',
+            licenseVersion: DEFAULT_KIT_LICENSE_VERSION,
+            licenseAcceptedAt: new Date().toISOString(),
+            licenseTextSnapshot: DEFAULT_KIT_LICENSE,
+            stripeSubscriptionId: 'sub_route_1',
+          });
+          const res = await routeRequest(
+            req('POST', '/admin/entitlements/by-subscription/{stripeSubscriptionId}/status',
+              { stripeSubscriptionId: 'sub_route_1' },
+              { status: 'expired', expiresAt: '2000-01-01T00:00:00.000Z' }),
+            deps(),
+          );
+          expect(res.statusCode).toBe(200);
+          const items = JSON.parse(res.body).items;
+          expect(items).toHaveLength(1);
+          expect(items[0].status).toBe('expired');
+          const got = await ent().getEntitlement('route_sub_buyer', kitId);
+          expect(got?.status).toBe('expired');
         });
 
         it('GET single returns 404 without an entitlement', async () => {

@@ -44,6 +44,7 @@ import {
   transferKitRequestSchema,
   setKitPricingRequestSchema,
   grantEntitlementRequestSchema,
+  setEntitlementSubscriptionStatusRequestSchema,
   licensedPackageRequestSchema,
   addFavoriteRequestSchema,
 } from '@agentkitforge/contracts';
@@ -358,6 +359,15 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
 
       if (request.method === 'POST' && request.resource === '/admin/kits/{kitId}/licensed-package') {
         return withEntitlementRepo(request, allowedOrigins, entitlementRepository, (repo) => licensedPackageHandler(request, adminRepository, repo, deps.objectStore, allowedOrigins));
+      }
+
+      if (request.method === 'POST' && request.resource === '/admin/entitlements/by-subscription/{stripeSubscriptionId}/status') {
+        const subId = request.pathParameters?.stripeSubscriptionId ?? '';
+        return withAudit(deps, request, () => withEntitlementRepo(request, allowedOrigins, entitlementRepository, (repo) => setEntitlementSubscriptionStatusHandler(request, repo, allowedOrigins)),
+          (body) => {
+            const items = (body as { items?: Array<{ entitlementId?: string; status?: string }> })?.items ?? [];
+            return { action: 'entitlement.subscription_status_set', targetType: 'entitlement', targetId: subId, actorType: 'admin', metadata: { stripeSubscriptionId: subId, count: items.length, status: items[0]?.status ?? null } };
+          });
       }
 
       // --- Favorites (cloud-synced kit references, Seam B) ---
@@ -1552,6 +1562,7 @@ async function setKitPricingHandler(
       priceCents: update.priceCents ?? null,
       currency: update.currency,
       interval: update.interval ?? null,
+      trialDays: update.trialDays ?? null,
       downloadable: update.downloadable,
       licenseType: update.licenseType,
       licenseVersion: update.licenseVersion,
@@ -1623,6 +1634,27 @@ async function grantEntitlementHandler(
     stripeSubscriptionId: parsed.data.stripeSubscriptionId ?? null,
   });
   return json(request, allowedOrigins, 201, { item: entitlement });
+}
+
+async function setEntitlementSubscriptionStatusHandler(
+  request: CoreRequest,
+  repo: EntitlementRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const stripeSubscriptionId = request.pathParameters?.stripeSubscriptionId;
+  if (!stripeSubscriptionId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing stripeSubscriptionId' });
+  }
+  const parsed = setEntitlementSubscriptionStatusRequestSchema.safeParse(parseJsonBody(request));
+  if (!parsed.success) {
+    return json(request, allowedOrigins, 400, { message: 'Invalid subscription-status payload' });
+  }
+  const items = await repo.setEntitlementStatusBySubscription(
+    stripeSubscriptionId,
+    parsed.data.status,
+    parsed.data.expiresAt,
+  );
+  return json(request, allowedOrigins, 200, { items });
 }
 
 /**
