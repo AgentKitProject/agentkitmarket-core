@@ -1303,19 +1303,24 @@ export function createDynamoAuditRepository(config: DynamoAuditConfig): AuditRep
       const exclusiveStartKey = decodeAuditToken(input.nextToken);
 
       // Build SK range condition for since/until (SK begins with timestamp).
-      const skNames: Record<string, string> = { '#sk': 'sk' };
+      // Only declare #sk when it is actually used in the key expression —
+      // DynamoDB rejects unused ExpressionAttributeNames.
+      const skNames: Record<string, string> = {};
       const skValues: Record<string, unknown> = {};
       let skCondition = '';
       if (input.since && input.until) {
         skCondition = '#sk BETWEEN :since AND :until';
         skValues[':since'] = input.since;
         skValues[':until'] = `${input.until}#￿`;
+        skNames['#sk'] = 'sk';
       } else if (input.since) {
         skCondition = '#sk >= :since';
         skValues[':since'] = input.since;
+        skNames['#sk'] = 'sk';
       } else if (input.until) {
         skCondition = '#sk <= :until';
         skValues[':until'] = `${input.until}#￿`;
+        skNames['#sk'] = 'sk';
       }
 
       // Post-query filters (action, plus actor/target when not the partition key).
