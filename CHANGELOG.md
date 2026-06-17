@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.9.0...v0.10.0) (2026-06-17)
+
+
+### Features
+
+* **pricing:** persist trialDays + subscription-status entitlement lifecycle ([5719159](https://github.com/AgentKitProject/agentkitmarket-core/commit/571915923a91ae388da07c5536c8e5aaa8def2b9))
+
 ## [0.9.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.8.0...v0.9.0) (2026-06-17)
 
 
