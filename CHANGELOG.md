@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.10.0...v0.11.0) (2026-06-17)
+
+
+### Features
+
+* **orgs:** add Stripe Connect seller-payout fields + Seam B routes ([6249cac](https://github.com/AgentKitProject/agentkitmarket-core/commit/6249cacd75ab5586581c06d7c1745dbe0977c34f))
+
 ## [0.10.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.9.0...v0.10.0) (2026-06-17)
 
 
