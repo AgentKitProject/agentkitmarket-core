@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.11.0...v0.12.0) (2026-06-18)
+
+
+### Features
+
+* **orgs:** add GET /admin/orgs/{orgId}/kits route with active-membership gate ([5ac49a7](https://github.com/AgentKitProject/agentkitmarket-core/commit/5ac49a74df4acc6ba057d90d8d1e3accb58cae33))
+
 ## [0.11.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.10.0...v0.11.0) (2026-06-17)
 
 
