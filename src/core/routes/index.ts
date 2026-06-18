@@ -270,6 +270,10 @@ export async function routeRequest(request: CoreRequest, deps: RouterDeps): Prom
         return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => listUserOrgsHandler(request, repo, allowedOrigins));
       }
 
+      if (request.method === 'GET' && request.resource === '/admin/orgs/{orgId}/kits') {
+        return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => listOrgKitsHandler(request, repo, allowedOrigins));
+      }
+
       if (request.resource === '/admin/orgs/{orgId}/members') {
         if (request.method === 'GET') {
           return withOrgRepo(request, allowedOrigins, orgRepository, (repo) => listMembersHandler(request, repo, allowedOrigins));
@@ -1186,6 +1190,39 @@ async function listUserOrgsHandler(
   }
   const orgs = await orgRepository.listOrgsForUser(userId);
   return json(request, allowedOrigins, 200, { items: orgs });
+}
+
+/**
+ * GET /admin/orgs/{orgId}/kits — list all kits owned by an org (including private).
+ * The actorUserId query parameter must be an active member of the org; membership
+ * authorises access to private kits.
+ */
+async function listOrgKitsHandler(
+  request: CoreRequest,
+  orgRepository: OrgRepository,
+  allowedOrigins: string[],
+): Promise<CoreResponse> {
+  const orgId = request.pathParameters?.orgId;
+  if (!orgId) {
+    return json(request, allowedOrigins, 400, { message: 'Missing orgId' });
+  }
+  const actorUserId =
+    typeof request.queryStringParameters?.actorUserId === 'string'
+      ? request.queryStringParameters.actorUserId
+      : undefined;
+  if (!actorUserId) {
+    return json(request, allowedOrigins, 400, { message: 'actorUserId query parameter is required' });
+  }
+  const org = await orgRepository.getOrg(orgId);
+  if (!org) {
+    return json(request, allowedOrigins, 404, { message: 'Organization not found' });
+  }
+  const membership = await orgRepository.getMembership(orgId, actorUserId);
+  if (!membership || membership.status !== 'active') {
+    return json(request, allowedOrigins, 403, { message: 'You must be an active member of this organization' });
+  }
+  const kits = await orgRepository.listKitsForOrg(orgId);
+  return json(request, allowedOrigins, 200, { items: kits });
 }
 
 async function listMembersHandler(

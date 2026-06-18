@@ -39,6 +39,7 @@ export const ROUTES: RoutePattern[] = [
   { method: 'POST', template: '/admin/orgs' },
   { method: 'DELETE', template: '/admin/orgs/{orgId}' },
   { method: 'GET', template: '/admin/users/{userId}/orgs' },
+  { method: 'GET', template: '/admin/orgs/{orgId}/kits' },
   { method: 'GET', template: '/admin/orgs/{orgId}/members' },
   { method: 'POST', template: '/admin/orgs/{orgId}/members' },
   { method: 'DELETE', template: '/admin/orgs/{orgId}/members/{userId}' },
