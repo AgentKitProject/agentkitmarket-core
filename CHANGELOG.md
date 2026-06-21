@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.12.0...v0.13.0) (2026-06-21)
+
+
+### Features
+
+* **admin:** surface kit download count in admin submission responses ([#14](https://github.com/AgentKitProject/agentkitmarket-core/issues/14)) ([46fa5e0](https://github.com/AgentKitProject/agentkitmarket-core/commit/46fa5e0569b88e007c6610d6e1bf572a79c1bf6f))
+
 ## [0.12.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.11.0...v0.12.0) (2026-06-18)
 
 
