@@ -603,8 +603,25 @@ async function listAdminSubmissions(
   const nextOffset = query.cursorOffset + page.length;
   const nextToken = nextOffset < filtered.length ? encodeOffsetCursor(nextOffset) : null;
 
+  // Fetch kit download counts in parallel for all submissions that have a kitId.
+  const kitIds = [...new Set(page.map((s) => s.kitId).filter(Boolean))] as string[];
+  const kitDownloadMap = new Map<string, number>();
+  if (kitIds.length > 0) {
+    const kits = await Promise.all(kitIds.map((id) => adminRepository.getKit(id).catch(() => undefined)));
+    for (let i = 0; i < kitIds.length; i++) {
+      const kitId = kitIds[i];
+      const kit = kits[i];
+      if (kitId && kit && typeof kit.downloads === 'number') {
+        kitDownloadMap.set(kitId, kit.downloads);
+      }
+    }
+  }
+
   return json(request, allowedOrigins, 200, {
-    items: page.map(toAdminSubmission),
+    items: page.map((s) => ({
+      ...toAdminSubmission(s),
+      kitDownloads: kitDownloadMap.get(s.kitId) ?? 0,
+    })),
     cursor: nextToken,
     nextToken,
   });
@@ -625,8 +642,11 @@ async function getAdminSubmission(
     return json(request, allowedOrigins, 404, { message: 'Submission not found' });
   }
 
+  const kit = submission.kitId ? await adminRepository.getKit(submission.kitId).catch(() => undefined) : undefined;
+  const kitDownloads = kit && typeof kit.downloads === 'number' ? kit.downloads : 0;
+
   return json(request, allowedOrigins, 200, {
-    item: toAdminSubmission(submission),
+    item: { ...toAdminSubmission(submission), kitDownloads },
   });
 }
 
