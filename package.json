@@ -1,6 +1,6 @@
 {
   "name": "@agentkitforge/market-core",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Runtime-agnostic AgentKitMarket backend core: routes, services, ports, and AWS + self-host adapters. Shared by the hosted (Lambda/DynamoDB) and self-hosted (container/Postgres on k8s) deployments.",
   "type": "module",
   "main": "dist/index.js",
