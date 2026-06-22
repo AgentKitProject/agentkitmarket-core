@@ -1,6 +1,6 @@
 # AgentKitMarket Self-Hosting Design
 
-Status: **active** · Last updated 2026-06-14 · Owner: AgentKitProject
+Status: **active** · Last updated 2026-06-22 · Owner: AgentKitProject
 
 ## Goal & constraints
 Let anyone **self-host AgentKitMarket on Kubernetes** using **the same code** as
@@ -21,6 +21,7 @@ Only two thin layers differ per deployment:
 | Object store adapter | S3 | MinIO (S3-compatible) |
 | Queue adapter | SQS | Redis |
 | Web app | Next.js on Amplify | same Next.js image, runtime-configured |
+| Auth (web) | WorkOS/AuthKit | generic OIDC (`AUTH_PROVIDER=oidc`) |
 
 DynamoDB is *cheaper than any AWS Postgres at idle*, so hosted keeps it; self-host
 uses Postgres because self-hosters won't run DynamoDB.
@@ -66,12 +67,26 @@ event→HTTP adapter (mechanical).
 ## Web app
 Stays on Amplify for hosted. Self-host uses the same Next.js image with the
 backend URL as **runtime** config (a server-read `/config` or runtime env), not
-the build-time `NEXT_PUBLIC_…`. WorkOS auth is identical in both (external).
+the build-time `NEXT_PUBLIC_…`.
+
+**Auth is pluggable** (`AUTH_PROVIDER`): hosted uses WorkOS/AuthKit; self-host
+uses **generic OIDC** (`AUTH_PROVIDER=oidc`) against any standards-compliant IdP
+(Keycloak, Authentik, Dex, Auth0, Okta, Entra ID, …). The OIDC path needs
+`OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, an iron-session
+`SESSION_SECRET`, and an admin signal — either a group/role claim
+(`ADMIN_OIDC_GROUP`) or an email allowlist (`ADMIN_EMAILS`). No WorkOS account is
+required to self-host.
 
 ## Self-host packaging (Helm)
-Chart deploys `market-web`, `market-api` (server), `market-worker`, plus
-`postgres`, `minio`, `redis` (subcharts or BYO), an Ingress, and a
-Secret/ConfigMap for WorkOS + admin key. **Validated end-to-end on the project
+Chart (`charts/agentkitmarket/`) deploys `web` (agentkitmarket-app), `api`
+(server), `worker`, plus bundled `postgres`, `minio`, `redis` (toggleable; BYO
+external for HA), Ingress, and a ConfigMap/Secret per tier. The
+`values-k3s.yaml` preset is the batteries-included self-host profile: OIDC on,
+bundled data services, **plain Kubernetes Secrets** (no Infisical / external
+secret manager required), and **chart-generated** `ADMIN_API_KEY`,
+`SESSION_SECRET`, and DB/MinIO passwords (persisted via `lookup` across
+upgrades, never a `changeme` placeholder). The web tier reuses the backend's
+generated `ADMIN_API_KEY` automatically. **Validated end-to-end on the project
 owner's homelab k8s** before publishing.
 
 ## CI anti-drift
@@ -87,6 +102,8 @@ single most important guard for "same code, not a fork."
 4. **Helm chart** — deploy + verify on homelab k8s.
 5. **Web app runtime config** — self-host web image.
 6. **Docs** — a `helm install` self-hosting guide.
+7. **OIDC + plain-Secrets self-host** — pluggable web auth (`AUTH_PROVIDER=oidc`),
+   chart credential generation, and the `values-k3s.yaml` one-command preset.
 
 Each phase is independently shippable; #1 de-risks everything after it.
 

@@ -28,7 +28,7 @@ metadata:
 type: Opaque
 data:
   MINIO_ROOT_USER: {{ .Values.minio.rootUser | b64enc | quote }}
-  MINIO_ROOT_PASSWORD: {{ .Values.minio.rootPassword | b64enc | quote }}
+  MINIO_ROOT_PASSWORD: {{ include "agentkitmarket.effectiveMinioPassword" . | b64enc | quote }}
 {{- end }}
 ---
 apiVersion: apps/v1

@@ -12,19 +12,42 @@ backend URL or WorkOS is baked at build time.
 
 - **Backend URL**: server-side only. Defaults to the in-cluster API Service
   (`http://<release>-api`); override with `web.config.apiBaseUrl`.
-- **Public browsing works without login.** WorkOS is only needed for sign-in,
-  admin review, submit, and browser-initiated downloads. Self-hosters bring
-  their own WorkOS; supply `web.secrets.workosApiKey` / `workosClientId` /
-  `workosCookiePassword` (or `web.secrets.existingSecret`) and
-  `web.config.appUrl`.
-- **Admin → backend key**: `web.secrets.adminApiKey` must match the backend's
-  `secrets.adminApiKey`.
-- **Ingress split**: `web.ingress` exposes the UI and `api.ingress` exposes the
-  API; both follow the tailscale `defaultBackend` pattern (leave `host` empty).
-  Expose the web ingress to users; the API can stay ClusterIP-internal since the
-  web app calls it in-cluster.
+- **Pluggable auth** (`web.authProvider`): `workos` (hosted default) or `oidc`
+  (self-host). **Public browsing works without login** either way — auth only
+  gates sign-in, admin review, submit, and browser-initiated downloads.
+  - **OIDC self-host** (`web.authProvider=oidc`): set `web.config.oidc.issuer`,
+    `web.config.oidc.clientId`, `web.secrets.oidcClientSecret`, and
+    `web.config.appUrl`. `SESSION_SECRET` is generated for you. See
+    [`docs/SELF_HOSTING.md`](../../docs/SELF_HOSTING.md).
+  - **WorkOS** (`web.authProvider=workos`): set `web.secrets.workosApiKey` /
+    `workosClientId` / `workosCookiePassword`.
+- **Admin**: by OIDC group (`web.config.oidc.adminGroup`) and/or email
+  (`web.config.adminEmails`).
+- **Admin → backend key**: the web tier reuses the backend's `ADMIN_API_KEY`
+  automatically; override only with `web.secrets.adminApiKey` if you split them.
+- **Ingress**: `web.ingress` exposes the UI; the API can stay ClusterIP-internal
+  since the web app calls it in-cluster. Expose the web ingress to users.
 
 Disable the UI (backend-only) with `--set web.enabled=false`.
+
+## k3s / self-host quickstart
+
+Use the `values-k3s.yaml` preset: OIDC auth, bundled Postgres/MinIO/Redis, plain
+Kubernetes Secrets, and chart-generated `ADMIN_API_KEY` / `SESSION_SECRET` /
+DB+MinIO passwords (no `changeme`, persisted across upgrades).
+
+```bash
+helm install agentkitmarket ./charts/agentkitmarket -f charts/agentkitmarket/values-k3s.yaml \
+  --set web.config.appUrl=https://market.example.com \
+  --set web.ingress.host=market.example.com \
+  --set web.config.oidc.issuer=https://idp.example.com \
+  --set web.config.oidc.clientId=agentkitmarket \
+  --set web.secrets.oidcClientSecret="$OIDC_CLIENT_SECRET" \
+  --set web.config.oidc.adminGroup=agentkit-admins \
+  --namespace agentkit --create-namespace
+```
+
+See [`docs/SELF_HOSTING.md`](../../docs/SELF_HOSTING.md) for the full guide.
 
 ## Quick start
 

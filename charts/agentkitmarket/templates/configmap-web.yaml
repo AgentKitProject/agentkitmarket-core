@@ -6,9 +6,15 @@
   {{- $apiBaseUrl = printf "http://%s-api" $fullname -}}
 {{- end -}}
 {{- $appUrl := .Values.web.config.appUrl -}}
+{{- $isOidc := eq .Values.web.authProvider "oidc" -}}
 {{- $redirect := .Values.web.config.workosRedirectUri -}}
 {{- if and (not $redirect) $appUrl -}}
   {{- $redirect = printf "%s/auth/callback" (trimSuffix "/" $appUrl) -}}
+{{- end -}}
+{{- $oidc := .Values.web.config.oidc -}}
+{{- $oidcRedirect := $oidc.redirectUri -}}
+{{- if and (not $oidcRedirect) $appUrl -}}
+  {{- $oidcRedirect = printf "%s/auth/callback" (trimSuffix "/" $appUrl) -}}
 {{- end -}}
 apiVersion: v1
 kind: ConfigMap
@@ -21,20 +27,47 @@ data:
   NODE_ENV: "production"
   PORT: {{ .Values.web.port | quote }}
   HOSTNAME: "0.0.0.0"
+  # Auth provider: "workos" (hosted default) or "oidc" (self-host).
+  AUTH_PROVIDER: {{ .Values.web.authProvider | quote }}
   # Backend URL — server-side only; the browser never reads it.
   NEXT_PUBLIC_AGENTKITMARKET_API_BASE_URL: {{ $apiBaseUrl | quote }}
   {{- if $appUrl }}
   APP_URL: {{ $appUrl | quote }}
   NEXT_PUBLIC_APP_URL: {{ $appUrl | quote }}
   {{- end }}
+  {{- if .Values.web.config.adminEmails }}
+  # Admin allowlist — both var names so either provider resolves it.
+  AGENTKITMARKET_ADMIN_EMAILS: {{ .Values.web.config.adminEmails | quote }}
+  ADMIN_EMAILS: {{ .Values.web.config.adminEmails | quote }}
+  {{- end }}
+  {{- if .Values.web.config.profileApiBaseUrl }}
+  PROFILE_API_BASE_URL: {{ .Values.web.config.profileApiBaseUrl | quote }}
+  {{- end }}
+  {{- if $isOidc }}
+  # ---- OIDC (self-host) ----
+  {{- with .Values.web.config.oidc.issuer }}
+  OIDC_ISSUER: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.web.config.oidc.clientId }}
+  OIDC_CLIENT_ID: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.web.config.oidc.scopes }}
+  OIDC_SCOPES: {{ . | quote }}
+  {{- end }}
+  {{- if $oidcRedirect }}
+  OIDC_REDIRECT_URI: {{ $oidcRedirect | quote }}
+  {{- end }}
+  {{- with .Values.web.config.oidc.adminGroup }}
+  ADMIN_OIDC_GROUP: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.web.config.oidc.allowInsecure }}
+  OIDC_ALLOW_INSECURE: "true"
+  {{- end }}
+  {{- else }}
+  # ---- WorkOS (hosted default) ----
   {{- if $redirect }}
   WORKOS_REDIRECT_URI: {{ $redirect | quote }}
   NEXT_PUBLIC_WORKOS_REDIRECT_URI: {{ $redirect | quote }}
   {{- end }}
-  {{- if .Values.web.config.adminEmails }}
-  AGENTKITMARKET_ADMIN_EMAILS: {{ .Values.web.config.adminEmails | quote }}
-  {{- end }}
-  {{- if .Values.web.config.profileApiBaseUrl }}
-  PROFILE_API_BASE_URL: {{ .Values.web.config.profileApiBaseUrl | quote }}
   {{- end }}
 {{- end }}
