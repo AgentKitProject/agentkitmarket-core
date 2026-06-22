@@ -20,6 +20,13 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- /* Optional static /etc/hosts entries for the web pod. Default empty
+        (secure default unchanged). Used by the k3s smoke test to resolve the
+        ingress nip.io hosts straight to the node IP when the CNI can't hairpin. */}}
+      {{- with .Values.web.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
@@ -39,6 +46,13 @@ spec:
             - secretRef:
                 name: {{ include "agentkitmarket.webEffectiveSecretName" . }}
                 optional: true
+          {{- /* Optional extra env vars merged verbatim into the web container.
+            Default empty (secure default unchanged). Used by the k3s smoke test
+            to inject NODE_TLS_REJECT_UNAUTHORIZED=0 for self-signed Traefik TLS. */}}
+          {{- with .Values.web.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           readinessProbe:
             httpGet:
               path: /
