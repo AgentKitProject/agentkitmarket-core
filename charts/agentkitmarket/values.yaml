@@ -65,6 +65,15 @@ web:
   service:
     type: ClusterIP
     port: 80
+  # Extra env vars merged verbatim into the web container (standard k8s env
+  # list). Default empty. Use sparingly — e.g. the k3s smoke test injects
+  # NODE_TLS_REJECT_UNAUTHORIZED=0 to accept Traefik's self-signed TLS during
+  # OIDC discovery. NEVER disable TLS verification in production.
+  extraEnv: []
+  # Static /etc/hosts entries for the web pod (standard k8s hostAliases list).
+  # Default empty. Used by the k3s smoke test to resolve the ingress nip.io
+  # hosts to the node IP when the CNI can't hairpin.
+  hostAliases: []
   # Auth provider for the web tier: "workos" (hosted SaaS default) or "oidc"
   # (generic OpenID Connect for self-host). Sets AUTH_PROVIDER on the web app.
   authProvider: "workos"
