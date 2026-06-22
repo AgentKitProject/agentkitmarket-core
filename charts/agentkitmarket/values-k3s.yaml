@@ -1,0 +1,145 @@
+# ===========================================================================
+# values-k3s.yaml — self-host preset for a single-node k3s cluster.
+#
+# A batteries-included, AWS-free deployment: bundled Postgres + MinIO + Redis,
+# generic OIDC for the web tier, plain k8s Secrets (no Infisical / Sealed
+# Secrets required), and chart-generated credentials so there are no "changeme"
+# placeholders to forget.
+#
+# Quickstart:
+#   helm install agentkitmarket ./charts/agentkitmarket -f values-k3s.yaml \
+#     --set web.config.appUrl=https://market.example.com \
+#     --set web.ingress.host=market.example.com \
+#     --set web.config.oidc.issuer=https://idp.example.com \
+#     --set web.config.oidc.clientId=agentkitmarket \
+#     --set web.secrets.oidcClientSecret=... \
+#     --set web.config.oidc.adminGroup=agentkit-admins
+#
+# Everything else (ADMIN_API_KEY, SESSION_SECRET, DB / MinIO passwords) is
+# generated and persisted by the chart. See docs/SELF_HOSTING.md for the full
+# walkthrough and a Secret-based (no --set on the CLI) alternative.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Images. Pin to a published release tag for reproducible deploys; :latest is
+# the default. The api/worker image is the public market-core image; the web
+# image is the OIDC-capable agentkitmarket-app.
+# ---------------------------------------------------------------------------
+image:
+  repository: ghcr.io/agentkitproject/agentkitmarket-core
+  # TODO: pin to a release tag once published, e.g. tag: "0.13.0"
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Both images live in the public AgentKitProject GHCR org → no pull secret.
+imagePullSecrets: []
+
+# Single-node k3s: one replica each is plenty.
+api:
+  replicas: 1
+  # The web tier reaches the API in-cluster; no API ingress needed. Expose the
+  # web app instead (see web.ingress below). Flip enabled=true + set host to
+  # also expose the backend HTTP API (e.g. for the Forge CLI / direct clients).
+  ingress:
+    enabled: false
+    className: "traefik"
+    host: ""
+
+worker:
+  replicas: 1
+
+# ---------------------------------------------------------------------------
+# Web tier (agentkitmarket-app) — generic OIDC self-host.
+# ---------------------------------------------------------------------------
+web:
+  enabled: true
+  replicas: 1
+  image:
+    repository: ghcr.io/agentkitproject/agentkitmarket-app
+    # TODO: pin to the OIDC-capable release tag once published.
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  # Generic OpenID Connect (Keycloak, Authentik, Dex, Auth0, Okta, etc.).
+  authProvider: "oidc"
+  config:
+    # Backend URL defaults to the in-cluster API Service — leave empty.
+    apiBaseUrl: ""
+    # REQUIRED: your public origin. Drives APP_URL + the OIDC redirect URI.
+    appUrl: ""
+    # Optional admin allowlist by email (in addition to / instead of adminGroup).
+    adminEmails: ""
+    oidc:
+      # REQUIRED: your IdP issuer (OIDC discovery base; must serve
+      # /.well-known/openid-configuration).
+      issuer: ""
+      # REQUIRED: the OAuth client id you registered for this app.
+      clientId: ""
+      # Defaults to "openid profile email" when empty.
+      scopes: ""
+      # Defaults to "<appUrl>/auth/callback" when empty.
+      redirectUri: ""
+      # Grant admin to anyone whose token carries this group/role claim.
+      adminGroup: ""
+      # Leave false in production. Set true only for an http:// dev IdP.
+      allowInsecure: false
+  secrets:
+    # REQUIRED: the OAuth client secret for the client id above.
+    oidcClientSecret: ""
+    # SESSION_SECRET — leave empty; the chart generates + persists a 48-char one.
+    sessionSecret: ""
+    # adminApiKey — leave empty; reuses the chart-generated backend ADMIN_API_KEY.
+    adminApiKey: ""
+  ingress:
+    enabled: true
+    # Set to your public hostname. Provide a real IngressClass for your cluster
+    # (k3s ships Traefik by default → className "traefik").
+    className: "traefik"
+    host: ""
+    annotations: {}
+    tls: []
+    #  - secretName: agentkitmarket-web-tls
+    #    hosts:
+    #      - market.example.com
+
+# ---------------------------------------------------------------------------
+# Backend config + secrets. All credentials below are chart-generated.
+# ---------------------------------------------------------------------------
+config:
+  allowedOrigins: ""
+  s3Region: "us-east-1"
+  s3ForcePathStyle: "true"
+  port: "8080"
+
+secrets:
+  # Generate ADMIN_API_KEY + DB/MinIO passwords when left empty; persisted across
+  # upgrades. No "changeme" anywhere.
+  generate: true
+  adminApiKey: ""
+  databaseUrl: ""
+  s3Endpoint: ""
+  packageBucketName: ""
+  s3AccessKeyId: ""
+  s3SecretAccessKey: ""
+  redisUrl: ""
+
+# ---------------------------------------------------------------------------
+# Bundled data services (single-replica; fine for a self-host node). Passwords
+# are chart-generated. Point at external services + disable these for HA.
+# ---------------------------------------------------------------------------
+postgres:
+  enabled: true
+  password: ""        # generated
+  storage:
+    size: 10Gi
+
+minio:
+  enabled: true
+  rootUser: minioadmin
+  rootPassword: ""     # generated
+  storage:
+    size: 20Gi
+
+redis:
+  enabled: true
+  storage:
+    size: 2Gi
