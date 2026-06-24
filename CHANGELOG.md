@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.13.0...v0.14.0) (2026-06-24)
+
+
+### Features
+
+* **selfhost:** k3s OIDC self-host preset, generated secrets, multi-arch image ([#16](https://github.com/AgentKitProject/agentkitmarket-core/issues/16)) ([1b69ea7](https://github.com/AgentKitProject/agentkitmarket-core/commit/1b69ea76352c141cf2aa8a43f61333248a54b7c9))
+* **selfhost:** public S3 endpoint for presigned URLs + MinIO ingress ([#19](https://github.com/AgentKitProject/agentkitmarket-core/issues/19)) ([f6fc558](https://github.com/AgentKitProject/agentkitmarket-core/commit/f6fc558d5fbd4dc7f3c2b44254f9a865053820b1))
+
 ## [0.13.0](https://github.com/AgentKitProject/agentkitmarket-core/compare/v0.12.0...v0.13.0) (2026-06-21)
 
 
