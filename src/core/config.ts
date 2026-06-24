@@ -33,6 +33,11 @@ export class EnvConfigProvider implements ConfigProvider {
 export interface SelfHostObjectStoreConfig {
   /** S3-compatible endpoint, e.g. `http://minio:9000`. */
   endpoint: string;
+  /**
+   * Public S3-compatible endpoint used ONLY for presigned URLs handed to
+   * clients; undefined when unset (presign falls back to `endpoint`).
+   */
+  publicEndpoint?: string;
   bucket: string;
   region: string;
   accessKeyId: string;
@@ -72,6 +77,7 @@ export function loadSelfHostConfig(config: ConfigProvider): SelfHostConfig {
     postgresUrl: config.get('DATABASE_URL', true)!,
     objectStore: {
       endpoint: config.get('S3_ENDPOINT', true)!,
+      publicEndpoint: config.get('S3_PUBLIC_ENDPOINT'),
       bucket: config.get('PACKAGE_BUCKET_NAME', true)!,
       region: config.get('S3_REGION') ?? 'us-east-1',
       accessKeyId: config.get('S3_ACCESS_KEY_ID', true)!,

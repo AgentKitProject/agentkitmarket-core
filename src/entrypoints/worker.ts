@@ -28,6 +28,7 @@ export async function startWorker(): Promise<StartWorkerResult> {
 
   const objectStore = createMinioObjectStore({
     endpoint: config.objectStore.endpoint,
+    publicEndpoint: config.objectStore.publicEndpoint,
     bucket: config.objectStore.bucket,
     region: config.objectStore.region,
     accessKeyId: config.objectStore.accessKeyId,

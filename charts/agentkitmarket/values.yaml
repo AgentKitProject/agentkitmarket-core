@@ -94,6 +94,12 @@ web:
     adminEmails: ""
     # Server-side Profile API base URL (PROFILE_API_BASE_URL). Optional.
     profileApiBaseUrl: ""
+    # Self-host signal (SELF_HOST=true). Hides the hosted-Forge vendor link
+    # unless web.config.forgeUrl is set.
+    selfHost: false
+    # Operator's own Web Forge URL (NEXT_PUBLIC_FORGE_URL) for "open in Forge"
+    # links; empty + selfHost=true → link hidden.
+    forgeUrl: ""
     # ---- OIDC (self-host) non-secret config; used when authProvider=oidc ----
     oidc:
       # OIDC issuer URL (OIDC_ISSUER), e.g. https://idp.example.com/realms/main
@@ -225,6 +231,11 @@ secrets:
   databaseUrl: ""
   # S3/MinIO endpoint (S3_ENDPOINT), e.g. http://minio:9000
   s3Endpoint: ""
+  # Public/externally-reachable S3/MinIO endpoint used ONLY for presigned
+  # upload/download URLs handed to browsers (S3_PUBLIC_ENDPOINT). Empty →
+  # presign uses the internal s3Endpoint. Set this to your MinIO ingress URL on
+  # self-host so presigned URLs are reachable by clients.
+  s3PublicEndpoint: ""
   # S3/MinIO bucket name (PACKAGE_BUCKET_NAME)
   packageBucketName: ""
   # S3/MinIO access key (S3_ACCESS_KEY_ID)
@@ -262,6 +273,14 @@ minio:
   # Leave empty to let the chart generate + persist a strong password
   # (secrets.generate=true). Set explicitly to pin one.
   rootPassword: ""
+  # Expose MinIO externally so presigned S3 URLs are reachable by browsers.
+  # Pair with secrets.s3PublicEndpoint set to this ingress's URL.
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    annotations: {}
+    tls: []
   storage:
     size: 10Gi
     # storageClassName: ""

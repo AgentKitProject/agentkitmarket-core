@@ -64,6 +64,7 @@ export async function startServer(): Promise<StartServerResult> {
 
   const objectStore = createMinioObjectStore({
     endpoint: config.objectStore.endpoint,
+    publicEndpoint: config.objectStore.publicEndpoint,
     bucket: config.objectStore.bucket,
     region: config.objectStore.region,
     accessKeyId: config.objectStore.accessKeyId,
