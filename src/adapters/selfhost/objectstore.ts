@@ -28,6 +28,11 @@ import {
 export interface MinioObjectStoreConfig {
   /** MinIO endpoint, e.g. `http://minio:9000`. */
   endpoint: string;
+  /**
+   * Public S3/MinIO endpoint used ONLY for generating presigned URLs handed to
+   * clients; defaults to `endpoint` when unset.
+   */
+  publicEndpoint?: string;
   bucket: string;
   region?: string;
   accessKeyId: string;
@@ -40,6 +45,19 @@ export function createMinioObjectStore(config: MinioObjectStoreConfig): ObjectSt
   const bucket = config.bucket;
   const s3 = new S3Client({
     endpoint: config.endpoint,
+    region: config.region ?? 'us-east-1',
+    forcePathStyle: config.forcePathStyle ?? true,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+  });
+
+  // Separate client for presigning: presigned URLs are handed to external
+  // clients, so they must point at the PUBLIC endpoint. When `publicEndpoint`
+  // is unset this is configured identically to `s3`, so behavior is unchanged.
+  const s3Presign = new S3Client({
+    endpoint: config.publicEndpoint ?? config.endpoint,
     region: config.region ?? 'us-east-1',
     forcePathStyle: config.forcePathStyle ?? true,
     credentials: {
@@ -73,7 +91,7 @@ export function createMinioObjectStore(config: MinioObjectStoreConfig): ObjectSt
     },
 
     createUploadUrl(key: string): Promise<string> {
-      return getSignedUrl(s3, new PutObjectCommand({
+      return getSignedUrl(s3Presign, new PutObjectCommand({
         Bucket: bucket,
         Key: key,
         ContentType: 'application/zip',
@@ -83,7 +101,7 @@ export function createMinioObjectStore(config: MinioObjectStoreConfig): ObjectSt
     },
 
     createDownloadUrl(key: string): Promise<string> {
-      return getSignedUrl(s3, new GetObjectCommand({
+      return getSignedUrl(s3Presign, new GetObjectCommand({
         Bucket: bucket,
         Key: key,
       }), {

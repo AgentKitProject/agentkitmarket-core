@@ -43,6 +43,12 @@ data:
   {{- if .Values.web.config.profileApiBaseUrl }}
   PROFILE_API_BASE_URL: {{ .Values.web.config.profileApiBaseUrl | quote }}
   {{- end }}
+  {{- if .Values.web.config.selfHost }}
+  SELF_HOST: "true"
+  {{- end }}
+  {{- with .Values.web.config.forgeUrl }}
+  NEXT_PUBLIC_FORGE_URL: {{ . | quote }}
+  {{- end }}
   {{- if $isOidc }}
   # ---- OIDC (self-host) ----
   {{- with .Values.web.config.oidc.issuer }}
